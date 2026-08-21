@@ -1,0 +1,40 @@
+# mod.io mod list - example, to adapt.
+#
+# Copy it and put your own ids in the copy:
+#
+#     cp mods.example.txt mods.txt
+#
+# mods.txt is git-ignored, so your list stays yours.
+#
+# WHAT THIS FILE IS
+# The server reads its mods from the <Mods> block of
+# SpaceEngineers-Dedicated.cfg, not from here. This file is the readable
+# inventory you keep next to it: one line per mod, so you can tell what a
+# numeric id is months later and rebuild the block after a wipe.
+#
+# FORMAT
+# One numeric mod.io id per line. Anything after '#' is a comment, and empty
+# lines are ignored. The ids below are placeholders: replace every one of them.
+#
+# FINDING A mod.io ID WITHOUT THE API
+# It sits in the thumbnail URL of the mod page:
+#     https://thumb.modcdn.io/mods/xxxx/<ID>/crop_320x180/...
+# The site search does not match author names, and slugs are not guessable
+# from the display name, so the URL is the reliable route.
+#
+# WHAT WORKS, AND WHAT DOES NOT
+#   - Steam Workshop mods are excluded by crossplay. mod.io only.
+#   - Script mods only run when their code is server-side; client code is not
+#     executed for console players.
+#   - <AutodetectDependencies>true</AutodetectDependencies> pulls in mods that
+#     are NOT on this list. Read the real list from the startup log, never from
+#     the config.
+#   - Loading time is the real cost. A vanilla world is ready in about 45
+#     seconds; a dozen mods, planet mods especially, push that to several
+#     minutes. Raise SE_START_TIMEOUT (default 900 s) before blaming a crash.
+#
+# ---------------------------------------------------------------------------
+
+0000001    # placeholder - replace with a real mod.io id
+0000002    # placeholder - one line per mod, comment says what it is
+0000003    # placeholder - a planet mod costs minutes of loading, not seconds

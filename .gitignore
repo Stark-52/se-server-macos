@@ -1,0 +1,58 @@
+# Local configuration: paths, world name, server name, password.
+config.sh
+
+# Server binaries fetched with steamcmd (+app_update 298740).
+# Several GB, and redistributing them is not ours to do.
+game/
+
+# Wine prefixes, whatever they are called. Multi-GB, and drive_c/users/<name>
+# leaks the account name through the folder name alone. Regenerate them with
+# the bootstrap step.
+#
+# The glob is deliberate: prefix/ and prefix-mono/ are only the two we happen
+# to use. A throwaway prefix-test/ or prefix2/ leaks the account name exactly
+# the same way, and naming each one by hand is a filter that fails silently
+# the first time someone invents a name.
+prefix*/
+
+# Server logs: they contain the server name, player handles, absolute home
+# paths and network addresses. The server writes them inside the prefix, which
+# is already ignored above; these two lines are the net for a copy pulled out
+# of the prefix to be read. No script in this repository creates logs/.
+logs/
+*.log
+
+# World and server configuration files, live copies included.
+# Sandbox.sbc, SANDBOX_0_0_0_.sbs and SpaceEngineers-Dedicated.cfg carry player
+# handles, IdentityIds and the server password hash and salt. In normal
+# operation they sit inside the Wine prefix, which is already ignored above,
+# but editing them by hand is a documented step: a working copy dropped in the
+# checkout must never become a commit. Ignore them by name, wherever they land.
+SpaceEngineers-Dedicated.cfg
+Sandbox.sbc
+Sandbox_config.sbc
+SANDBOX_0_0_0_.sbs
+*.sbc
+*.sbs
+*.sbsB5
+*.vx2
+
+# World backups, however they were taken.
+backup-*/
+backup-*.cfg
+Backup/
+
+# Your own mod list. Only the neutral example is committed.
+mods.txt
+!mods.example.txt
+
+# Caches and build leftovers.
+cache/
+__pycache__/
+*.pyc
+
+# Symlink snapshots taken while swapping toolkits: absolute machine paths.
+gptk-links-backup/
+
+# macOS noise.
+.DS_Store
