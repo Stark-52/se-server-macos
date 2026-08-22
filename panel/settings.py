@@ -35,6 +35,7 @@ d'ouvrir le port :  ssh -N -L 8777:127.0.0.1:8777 utilisateur@le-mac
 
 Usage :  python3 panel/settings.py
 """
+import datetime
 import getpass
 import html
 import http.server
@@ -470,6 +471,130 @@ def etat(valeurs=None):
     }
 
 
+def _taille_lisible(n):
+    """Taille en octets rendue courte, sans dependance."""
+    if n < 1024:
+        return str(n) + " o"
+    for unite, div in (("Ko", 1024), ("Mo", 1024 ** 2), ("Go", 1024 ** 3)):
+        if n < div * 1024 or unite == "Go":
+            return "%.1f %s" % (n / div, unite)
+    return str(n) + " o"
+
+
+def _poids(dossier):
+    """Somme des fichiers d'un dossier, sans descendre indefiniment."""
+    total, nb = 0, 0
+    try:
+        for f in dossier.rglob("*"):
+            if f.is_file():
+                try:
+                    total += f.stat().st_size
+                    nb += 1
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total, nb
+
+
+def sauvegardes(limite=24):
+    """Sauvegardes automatiques du monde, la plus recente en tete.
+
+    Space Engineers ecrit dans Saves/<monde>/Backup/<AAAA-MM-JJ HHMMSS>/.
+    C'est le NOM du dossier qui date la sauvegarde, pas son mtime : copier ou
+    restaurer une sauvegarde change le mtime et donnerait un ordre faux.
+    """
+    dossier = MONDE_DIR / "Backup"
+    out = []
+    if dossier.is_dir():
+        for d in sorted(dossier.iterdir(), reverse=True):
+            if not d.is_dir():
+                continue
+            try:
+                quand = datetime.datetime.strptime(d.name, "%Y-%m-%d %H%M%S")
+                horo = quand.strftime("%d/%m %H:%M:%S")
+                cle = quand.timestamp()
+            except ValueError:
+                horo, cle = d.name, 0.0
+            octets, nb = _poids(d)
+            out.append({"nom": d.name, "quand": horo, "cle": cle,
+                        "taille": _taille_lisible(octets), "octets": octets, "fichiers": nb})
+    out.sort(key=lambda x: x["cle"], reverse=True)
+    total = sum(x["octets"] for x in out)
+    vif = MONDE_DIR / "SANDBOX_0_0_0_.sbs"
+    return {
+        "liste": out[:limite],
+        "nombre": len(out),
+        "total": _taille_lisible(total),
+        "vif": (_taille_lisible(vif.stat().st_size) if vif.is_file() else None),
+        "vifAge": (int((time.time() - vif.stat().st_mtime) // 60) if vif.is_file() else -1),
+    }
+
+
+def _noms_de_mods():
+    """Noms lisibles des mods, releves dans les journaux du serveur.
+
+    Le monde ne stocke que l'identifiant, et le dossier Mods/ est vide sur une
+    installation dediee : le serveur telecharge dans cache/ sous le seul
+    numero. Le nom n'existe donc nulle part sur le disque SAUF dans le journal,
+    que le serveur reecrit a chaque demarrage. Les journaux sont lus du plus
+    ancien au plus recent pour qu'un renommage cote mod.io finisse par gagner.
+    """
+    noms = {}
+    try:
+        journaux = sorted(INST.glob("SpaceEngineersDedicated_*.log"),
+                          key=lambda f: f.stat().st_mtime)
+    except OSError:
+        return noms
+    for log in journaux:
+        try:
+            texte = log.read_text(errors="replace")
+        except OSError:
+            continue
+        # La forme "Up to date mod" d'abord, la forme detaillee ensuite : quand
+        # les deux sont presentes dans un meme journal, la seconde fait foi.
+        for motif in (r"mod: Id = (\d+), title = '([^']*)'",
+                      r"Id = mod\.io:(\d+), Filename = '[^']*', Name = '([^']*)'"):
+            for m in re.finditer(motif, texte):
+                noms[m.group(1)] = m.group(2)
+    return noms
+
+
+def mods():
+    """Mods actifs du monde, dans l'ordre de chargement.
+
+    L'ordre compte : Space Engineers applique les mods de haut en bas et le
+    dernier gagne en cas de conflit. On le preserve tel qu'il est dans le
+    fichier plutot que de trier par nom.
+    """
+    try:
+        texte = (MONDE_DIR / "Sandbox_config.sbc").read_text(errors="replace")
+    except OSError:
+        return {"liste": [], "nombre": 0, "sansNom": 0}
+    bloc = re.search(r"<Mods>(.*?)</Mods>", texte, re.S)
+    if not bloc:
+        return {"liste": [], "nombre": 0, "sansNom": 0}
+    noms = _noms_de_mods()
+    out = []
+    for item in re.finditer(r"<ModItem[^>]*>(.*?)</ModItem>", bloc.group(1), re.S):
+        corps = item.group(1)
+        ident = re.search(r"<PublishedFileId>(\d+)</PublishedFileId>", corps)
+        service = re.search(r"<PublishedServiceName>([^<]*)</PublishedServiceName>", corps)
+        if not ident:
+            continue
+        i = ident.group(1)
+        s = (service.group(1) if service else "")
+        out.append({
+            "id": i,
+            "nom": noms.get(i),
+            "service": s,
+            "lien": ("https://mod.io/g/spaceengineers?_q=" + i) if s == "mod.io" else
+                    ("https://steamcommunity.com/sharedfiles/filedetails/?id=" + i),
+        })
+    return {"liste": out, "nombre": len(out),
+            "sansNom": sum(1 for m in out if not m["nom"])}
+
+
 # --------------------------------------------------------------------------
 # Interface
 # --------------------------------------------------------------------------
@@ -564,6 +689,17 @@ h1{font-family:var(--font-cond);font-size:clamp(1.6rem,4.5vw,2.3rem);
 .theme button[aria-pressed="true"]{background:var(--signal);color:var(--signal-ink)}
 
 /* ---- ecrans d'etat ---- */
+.tbl{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.tbl th{font-family:var(--font-mono);font-size:.64rem;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--muted);text-align:left;padding:.55rem .8rem;background:var(--panel2);border-bottom:1px solid var(--line)}
+.tbl td{padding:.5rem .8rem;border-top:1px solid var(--line-soft);font-size:.86rem;vertical-align:baseline}
+.tbl tr:first-child td{border-top:0}
+.tbl .num{font-family:var(--font-mono);color:var(--muted);font-size:.76rem;width:2.2rem}
+.tbl .droite{text-align:right;font-family:var(--font-mono);font-size:.8rem;color:var(--soft);white-space:nowrap}
+.tbl .frais td{background:var(--ok-soft)}
+.tbl a{color:var(--steel)}
+.sansnom{color:var(--muted);font-style:italic}
+.wrap{overflow-x:auto}
 .lcds{display:grid;gap:.85rem;grid-template-columns:repeat(auto-fit,minmax(12.5rem,1fr))}
 .lcd{position:relative;background:var(--screen);border:1px solid var(--line);border-radius:3px;
   padding:.85rem .95rem .8rem;overflow:hidden;box-shadow:var(--shadow)}
@@ -701,6 +837,8 @@ footer.meta{font-family:var(--font-mono);font-size:.7rem;color:var(--muted);
   <div class="notice"><div>Appliquer <b>arrete le serveur</b>, ecrit dans les fichiers du monde, puis le relance : les joueurs sont deconnectes et tout ce qui n'a pas ete sauvegarde est perdu. Sans l'option d'arret force, <code>stop.sh</code> refuse de couper quand la derniere sauvegarde depasse <code>SE_SAVE_MAX_AGE</code>, et rien n'est ecrit. Lis l'age de la sauvegarde ci-dessus avant de valider.</div></div>
 
   <form id="f" autocomplete="off"></form>
+
+  <div id="inventaire"></div>
 
   <footer class="meta" id="meta"></footer>
 </div>
@@ -845,7 +983,41 @@ async function charger(){
   }
 }
 el("hote").textContent=location.host;
-el("recharger").onclick=function(){charger();};
+function secHead(num,titre,compte){
+  return "<div class=\"sec-head\"><span class=\"sec-num\">"+num+"</span><h2>"+esc(titre)+
+         "</h2><span class=\"sec-rule\"></span><span class=\"sec-count\">"+esc(compte)+"</span></div>";
+}
+function inventaire(){
+  fetch("/api/inventaire").then(function(x){return x.json();}).then(function(r){
+    var h="",s=r.sauvegardes||{},m=r.mods||{},lignes=s.liste||[];
+    h+="<section>"+secHead("S1","Sauvegardes",(s.nombre||0)+" au total, "+(s.total||"0 o"))+
+       "<div class=\"wrap\"><table class=\"tbl\">"+
+       "<tr><th></th><th>Horodatage</th><th class=\"droite\">Fichiers</th><th class=\"droite\">Taille</th></tr>";
+    if(s.vif){
+      h+="<tr><td class=\"num\">&bull;</td><td><b>Monde en cours</b> <span class=\"sansnom\">ecrit il y a "+
+         (s.vifAge<0?"?":s.vifAge)+" min</span></td><td class=\"droite\">&mdash;</td><td class=\"droite\">"+esc(s.vif)+"</td></tr>";
+    }
+    for(var i=0;i<lignes.length;i++){
+      h+="<tr"+(i===0?" class=\"frais\"":"")+"><td class=\"num\">"+(i+1)+"</td><td class=\"mono\">"+esc(lignes[i].quand)+
+         "</td><td class=\"droite\">"+lignes[i].fichiers+"</td><td class=\"droite\">"+esc(lignes[i].taille)+"</td></tr>";
+    }
+    if(!lignes.length)h+="<tr><td colspan=\"4\" class=\"sansnom\">Aucune sauvegarde automatique pour le moment.</td></tr>";
+    h+="</table></div></section>";
+    var lm=m.liste||[];
+    var note=m.sansNom?((m.nombre||0)+" actifs, "+m.sansNom+" sans nom connu"):((m.nombre||0)+" actifs");
+    h+="<section>"+secHead("S2","Mods",note)+"<div class=\"wrap\"><table class=\"tbl\">"+
+       "<tr><th></th><th>Nom</th><th>Identifiant</th></tr>";
+    for(var k=0;k<lm.length;k++){
+      var n=lm[k].nom?esc(lm[k].nom):"<span class=\"sansnom\">nom inconnu, pas encore journalise par le serveur</span>";
+      h+="<tr><td class=\"num\">"+(k+1)+"</td><td>"+n+"</td><td class=\"droite\"><a href=\""+esc(lm[k].lien)+
+         "\" target=\"_blank\" rel=\"noopener\">"+esc(lm[k].id)+"</a> <span class=\"sansnom\">"+esc(lm[k].service||"")+"</span></td></tr>";
+    }
+    if(!lm.length)h+="<tr><td colspan=\"3\" class=\"sansnom\">Aucun mod dans ce monde.</td></tr>";
+    h+="</table></div></section>";
+    el("inventaire").innerHTML=h;
+  }).catch(function(){});
+}
+el("recharger").onclick=function(){charger();inventaire();};
 el("forcer").onchange=function(){el("opt-force").classList.toggle("on",this.checked);};
 el("appliquer").onclick=async function(){
   var b=el("appliquer"),m=el("msg"),c=el("console"),out={};
@@ -871,6 +1043,7 @@ el("appliquer").onclick=async function(){
   b.disabled=false;c.classList.remove("busy");charger();
 };
 charger();
+inventaire();
 </script></body></html>"""
 
 
@@ -915,6 +1088,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._garde():
             return
+        if self.path.startswith("/api/inventaire"):
+            return self._j({"sauvegardes": sauvegardes(), "mods": mods()})
         if self.path.startswith("/api/etat"):
             valeurs = lire()
             return self._j({**etat(valeurs), "valeurs": valeurs, "risques": RISQUES,
