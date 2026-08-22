@@ -45,6 +45,7 @@ import os
 import pathlib
 import re
 import socketserver
+import shutil
 import subprocess
 import sys
 import time
@@ -595,6 +596,89 @@ def mods():
             "sansNom": sum(1 for m in out if not m["nom"])}
 
 
+def _sauvegarde_valide(nom):
+    """Resout un nom de sauvegarde en chemin, ou None.
+
+    Le nom vient du navigateur : il est resolu puis compare au dossier Backup
+    reel. Un nom contenant ../ ou un lien symbolique sortant est donc rejete,
+    pas simplement filtre.
+    """
+    if not nom or "/" in nom or "\\" in nom:
+        return None
+    base = (MONDE_DIR / "Backup").resolve()
+    try:
+        cible = (base / nom).resolve()
+        cible.relative_to(base)
+    except (OSError, ValueError):
+        return None
+    return cible if cible.is_dir() else None
+
+
+def reveler(nom):
+    """Ouvre le Finder sur une sauvegarde, ou sur le monde si nom est vide."""
+    cible = _sauvegarde_valide(nom) if nom else MONDE_DIR
+    if cible is None:
+        return {"ok": False, "erreur": "sauvegarde inconnue"}
+    try:
+        subprocess.run(["open", "-R", str(cible)], capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"ok": False, "erreur": str(e)[:200]}
+    return {"ok": True, "chemin": str(cible)}
+
+
+def restaurer(nom, forcer=False):
+    """Remet le monde dans l'etat d'une sauvegarde.
+
+    Sequence : arreter, mettre l'etat courant de cote, remplacer, relancer.
+    L'arret vient en premier parce qu'un monde ecrit pendant que le serveur
+    tourne est reecrit par la sauvegarde automatique suivante. Et si l'arret
+    est refuse, rien n'a bouge.
+
+    L'etat courant n'est pas efface mais deplace dans Backup/ sous un nom
+    horodate : une restauration se defait donc par une autre restauration.
+    """
+    cible = _sauvegarde_valide(nom)
+    if cible is None:
+        return {"ok": False, "erreur": "sauvegarde inconnue : " + str(nom)}
+    if not (cible / "Sandbox.sbc").is_file():
+        return {"ok": False, "erreur": "sauvegarde incomplete, Sandbox.sbc absent"}
+
+    arret, demarrage = ROOT / "scripts/stop.sh", ROOT / "scripts/start.sh"
+    for s in (arret, demarrage):
+        if not s.is_file():
+            return {"ok": False, "erreur": "script introuvable : " + str(s)}
+
+    cmd = ["bash", str(arret)] + (["--force"] if forcer else [])
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        detail = " ".join(((r.stdout or "") + " " + (r.stderr or "")).split())
+        return {"ok": False, "arretRefuse": True,
+                "erreur": "arret refuse, le monde n'a pas ete touche : " + detail[:500]}
+
+    horo = datetime.datetime.now().strftime("%Y-%m-%d %H%M%S")
+    filet = MONDE_DIR / "Backup" / (horo + " avant-restauration")
+    try:
+        filet.mkdir(parents=True, exist_ok=False)
+        for f in MONDE_DIR.iterdir():
+            if f.name == "Backup":
+                continue
+            shutil.move(str(f), str(filet / f.name))
+        for f in cible.iterdir():
+            (shutil.copytree if f.is_dir() else shutil.copy2)(str(f), str(MONDE_DIR / f.name))
+        # Le jeu relit de preference la copie compressee : la laisser annulerait
+        # silencieusement la restauration.
+        sbsb5 = MONDE_DIR / "SANDBOX_0_0_0_.sbsB5"
+        if sbsb5.exists():
+            sbsb5.unlink()
+    except (OSError, shutil.Error) as e:
+        subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+        return {"ok": False, "erreur": "restauration interrompue : " + str(e)[:300] +
+                "  —  l'etat precedent est dans Backup/" + filet.name}
+
+    subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+    return {"ok": True, "restauree": nom, "filet": filet.name}
+
+
 # --------------------------------------------------------------------------
 # Interface
 # --------------------------------------------------------------------------
@@ -689,6 +773,16 @@ h1{font-family:var(--font-cond);font-size:clamp(1.6rem,4.5vw,2.3rem);
 .theme button[aria-pressed="true"]{background:var(--signal);color:var(--signal-ink)}
 
 /* ---- ecrans d'etat ---- */
+.shell > #inventaire{display:flex;flex-direction:column;gap:1.6rem}
+#inventaire section{display:flex;flex-direction:column;gap:.7rem}
+.mini{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
+  padding:.28rem .55rem;border:1px solid var(--line);border-radius:2px;background:var(--panel2);
+  color:var(--soft);cursor:pointer;white-space:nowrap}
+.mini:hover{border-color:var(--signal);color:var(--signal)}
+.mini.danger{border-color:var(--stop);color:var(--stop)}
+.mini.danger:hover{background:var(--stop);color:var(--panel)}
+.mini[disabled]{opacity:.45;cursor:default}
+.actions{display:flex;gap:.35rem;justify-content:flex-end}
 .tbl{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:3px;overflow:hidden}
 .tbl th{font-family:var(--font-mono);font-size:.64rem;letter-spacing:.18em;text-transform:uppercase;
   color:var(--muted);text-align:left;padding:.55rem .8rem;background:var(--panel2);border-bottom:1px solid var(--line)}
@@ -987,34 +1081,77 @@ function secHead(num,titre,compte){
   return "<div class=\"sec-head\"><span class=\"sec-num\">"+num+"</span><h2>"+esc(titre)+
          "</h2><span class=\"sec-rule\"></span><span class=\"sec-count\">"+esc(compte)+"</span></div>";
 }
+function invAction(n,forcer){
+  var b=document.querySelector("[data-conf=\""+CSS.escape(n)+"\"]");
+  if(b)b.textContent="EN COURS";
+  document.querySelectorAll("#inventaire .mini").forEach(function(x){x.disabled=true;});
+  fetch("/api/restaurer",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({sauvegarde:n,forcer:!!forcer})})
+   .then(function(x){return x.json();}).then(function(r){
+      var m=el("msg");
+      if(r.ok){m.textContent="monde restaure depuis "+n+", etat precedent garde dans "+r.filet;}
+      else{m.textContent=(r.arretRefuse?"ARRET REFUSE, le monde n a pas ete touche  —  ":"echec  —  ")+(r.erreur||"");}
+      charger();inventaire();
+   }).catch(function(){el("msg").textContent="echec reseau";inventaire();});
+}
+function invOuvrir(n){
+  fetch("/api/reveler",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({sauvegarde:n})}).then(function(x){return x.json();}).then(function(r){
+      if(!r.ok)el("msg").textContent="ouverture impossible  —  "+(r.erreur||"");
+   }).catch(function(){});
+}
+function invConfirmer(n){
+  var c=document.querySelector("[data-act=\""+CSS.escape(n)+"\"]");
+  if(!c)return;
+  var f=el("forcer")&&el("forcer").checked;
+  c.innerHTML='<button type="button" class="mini" data-annule="1">Annuler</button>'+
+              '<button type="button" class="mini danger" data-conf="'+esc(n)+'">Confirmer</button>';
+  c.querySelector("[data-annule]").onclick=function(){inventaire();};
+  c.querySelector("[data-conf]").onclick=function(){invAction(n,f);};
+}
 function inventaire(){
   fetch("/api/inventaire").then(function(x){return x.json();}).then(function(r){
     var h="",s=r.sauvegardes||{},m=r.mods||{},lignes=s.liste||[];
     h+="<section>"+secHead("S1","Sauvegardes",(s.nombre||0)+" au total, "+(s.total||"0 o"))+
        "<div class=\"wrap\"><table class=\"tbl\">"+
-       "<tr><th></th><th>Horodatage</th><th class=\"droite\">Fichiers</th><th class=\"droite\">Taille</th></tr>";
+       "<tr><th></th><th>Horodatage</th><th class=\"droite\">Fichiers</th><th class=\"droite\">Taille</th><th></th></tr>";
     if(s.vif){
       h+="<tr><td class=\"num\">&bull;</td><td><b>Monde en cours</b> <span class=\"sansnom\">ecrit il y a "+
-         (s.vifAge<0?"?":s.vifAge)+" min</span></td><td class=\"droite\">&mdash;</td><td class=\"droite\">"+esc(s.vif)+"</td></tr>";
+         (s.vifAge<0?"?":s.vifAge)+" min</span></td><td class=\"droite\">&mdash;</td><td class=\"droite\">"+esc(s.vif)+
+         "</td><td><div class=\"actions\"><button type=\"button\" class=\"mini\" data-vif=\"1\">Ouvrir</button></div></td></tr>";
     }
     for(var i=0;i<lignes.length;i++){
+      var n=lignes[i].nom;
       h+="<tr"+(i===0?" class=\"frais\"":"")+"><td class=\"num\">"+(i+1)+"</td><td class=\"mono\">"+esc(lignes[i].quand)+
-         "</td><td class=\"droite\">"+lignes[i].fichiers+"</td><td class=\"droite\">"+esc(lignes[i].taille)+"</td></tr>";
+         "</td><td class=\"droite\">"+lignes[i].fichiers+"</td><td class=\"droite\">"+esc(lignes[i].taille)+
+         "</td><td><div class=\"actions\" data-act=\""+esc(n)+"\">"+
+         "<button type=\"button\" class=\"mini\" data-ouvre=\""+esc(n)+"\">Ouvrir</button>"+
+         "<button type=\"button\" class=\"mini danger\" data-rest=\""+esc(n)+"\">Restaurer</button>"+
+         "</div></td></tr>";
     }
-    if(!lignes.length)h+="<tr><td colspan=\"4\" class=\"sansnom\">Aucune sauvegarde automatique pour le moment.</td></tr>";
-    h+="</table></div></section>";
+    if(!lignes.length)h+="<tr><td colspan=\"5\" class=\"sansnom\">Aucune sauvegarde automatique pour le moment.</td></tr>";
+    h+="</table></div>"+
+       "<p class=\"aide\">Restaurer arrete le serveur, met le monde actuel de cote dans Backup/ sous un nom horodate, "+
+       "remet la sauvegarde choisie, puis relance. Une restauration se defait donc par une autre restauration. "+
+       "Le garde-fou d age de sauvegarde s applique, et la case forcer de la barre du bas le leve.</p></section>";
+
     var lm=m.liste||[];
     var note=m.sansNom?((m.nombre||0)+" actifs, "+m.sansNom+" sans nom connu"):((m.nombre||0)+" actifs");
     h+="<section>"+secHead("S2","Mods",note)+"<div class=\"wrap\"><table class=\"tbl\">"+
        "<tr><th></th><th>Nom</th><th>Identifiant</th></tr>";
     for(var k=0;k<lm.length;k++){
-      var n=lm[k].nom?esc(lm[k].nom):"<span class=\"sansnom\">nom inconnu, pas encore journalise par le serveur</span>";
-      h+="<tr><td class=\"num\">"+(k+1)+"</td><td>"+n+"</td><td class=\"droite\"><a href=\""+esc(lm[k].lien)+
+      var nn=lm[k].nom?esc(lm[k].nom):"<span class=\"sansnom\">nom inconnu, pas encore journalise par le serveur</span>";
+      h+="<tr><td class=\"num\">"+(k+1)+"</td><td>"+nn+"</td><td class=\"droite\"><a href=\""+esc(lm[k].lien)+
          "\" target=\"_blank\" rel=\"noopener\">"+esc(lm[k].id)+"</a> <span class=\"sansnom\">"+esc(lm[k].service||"")+"</span></td></tr>";
     }
     if(!lm.length)h+="<tr><td colspan=\"3\" class=\"sansnom\">Aucun mod dans ce monde.</td></tr>";
-    h+="</table></div></section>";
+    h+="</table></div><p class=\"aide\">Ordre de chargement. Space Engineers applique les mods de haut en bas, "+
+       "le dernier gagne en cas de conflit. Les noms viennent du journal du serveur, pas du reseau.</p></section>";
     el("inventaire").innerHTML=h;
+    var inv=el("inventaire");
+    inv.querySelectorAll("[data-ouvre]").forEach(function(b){b.onclick=function(){invOuvrir(b.dataset.ouvre);};});
+    inv.querySelectorAll("[data-rest]").forEach(function(b){b.onclick=function(){invConfirmer(b.dataset.rest);};});
+    var v=inv.querySelector("[data-vif]");if(v)v.onclick=function(){invOuvrir("");};
   }).catch(function(){});
 }
 el("recharger").onclick=function(){charger();inventaire();};
@@ -1102,7 +1239,9 @@ class H(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b)
 
     def do_POST(self):
-        if not self.path.startswith("/api/appliquer"):
+        if not (self.path.startswith("/api/appliquer")
+                or self.path.startswith("/api/restaurer")
+                or self.path.startswith("/api/reveler")):
             return self._j({"ok": False}, 404)
         if not self._garde(json_requis=True):
             return
@@ -1115,6 +1254,11 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._j({"ok": False, "erreur": "JSON illisible : " + str(e)})
         if not isinstance(recu, dict):
             return self._j({"ok": False, "erreur": "JSON attendu : un objet."})
+
+        if self.path.startswith("/api/reveler"):
+            return self._j(reveler(recu.get("sauvegarde")))
+        if self.path.startswith("/api/restaurer"):
+            return self._j(restaurer(recu.get("sauvegarde"), bool(recu.get("forcer"))))
 
         # Corps attendu : {"valeurs": {...}, "forcer": true|false}. Un objet
         # plat reste accepte et vaut forcer=false : l'arret force ne peut pas

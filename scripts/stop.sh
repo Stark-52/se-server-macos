@@ -12,9 +12,28 @@
 # The only shutdown that saves: "tmux attach -t <session>" and press Ctrl+C by
 # hand in the live console.
 
+# Dossier de CE script, symlinks resolus. Le code et l'installation sont deux
+# racines differentes : SE_ROOT designe l'INSTALLATION (jeu, prefixe, mondes,
+# config.sh), pas le depot. Sourcer common.sh depuis SE_ROOT confondait les
+# deux et cassait tout usage ou le depot vit ailleurs que l'installation.
+# readlink -f n'existe pas partout sur macOS, d'ou la boucle.
+_lien="${BASH_SOURCE[0]}"
+while [ -L "$_lien" ]; do
+  _cible=$(readlink "$_lien")
+  case "$_cible" in
+    /*) _lien="$_cible" ;;
+    *)  _lien="$(dirname "$_lien")/$_cible" ;;
+  esac
+done
+_CODE="$(cd "$(dirname "$_lien")" && pwd)"
+
+# SE_ROOT se deduit du chemin APPELE, pas du chemin resolu : appeler
+# <installation>/scripts/start.sh doit designer cette installation, meme quand
+# le fichier est un symlink vers le depot. Prendre le chemin resolu ferait
+# pointer SE_ROOT sur le depot, ou il n'y a ni jeu ni prefixe.
 SE_ROOT="${SE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # shellcheck source=common.sh
-. "$SE_ROOT/scripts/common.sh"
+. "$_CODE/common.sh"
 
 export WINEPREFIX="$SE_PREFIX"
 BASE="$SE_APPDATA"

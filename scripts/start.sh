@@ -11,9 +11,28 @@
 # the 32-bit .NET installer deadlocks under Wine on Apple Silicon and never
 # completes. Bootstrap the prefix with Mono and leave it alone.
 
+# Dossier de CE script, symlinks resolus. Le code et l'installation sont deux
+# racines differentes : SE_ROOT designe l'INSTALLATION (jeu, prefixe, mondes,
+# config.sh), pas le depot. Sourcer common.sh depuis SE_ROOT confondait les
+# deux et cassait tout usage ou le depot vit ailleurs que l'installation.
+# readlink -f n'existe pas partout sur macOS, d'ou la boucle.
+_lien="${BASH_SOURCE[0]}"
+while [ -L "$_lien" ]; do
+  _cible=$(readlink "$_lien")
+  case "$_cible" in
+    /*) _lien="$_cible" ;;
+    *)  _lien="$(dirname "$_lien")/$_cible" ;;
+  esac
+done
+_CODE="$(cd "$(dirname "$_lien")" && pwd)"
+
+# SE_ROOT se deduit du chemin APPELE, pas du chemin resolu : appeler
+# <installation>/scripts/start.sh doit designer cette installation, meme quand
+# le fichier est un symlink vers le depot. Prendre le chemin resolu ferait
+# pointer SE_ROOT sur le depot, ou il n'y a ni jeu ni prefixe.
 SE_ROOT="${SE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # shellcheck source=common.sh
-. "$SE_ROOT/scripts/common.sh"
+. "$_CODE/common.sh"
 
 export WINEPREFIX="$SE_PREFIX"
 export WINEDEBUG=fixme-all
@@ -63,7 +82,12 @@ for try in $(seq 1 "$SE_START_ATTEMPTS"); do
 
   if [ "$ok" = 1 ]; then
     SPID=$(pgrep -f "SpaceEngineersDedicated.exe" | head -1)
-    [ -n "$SPID" ] && (caffeinate -w "$SPID" >/dev/null 2>&1 &)
+    # -i veille inactive, -m veille des disques, -s veille systeme sur secteur.
+    # caffeinate seul n'assure que -i, ce qui laisse le Mac s'endormir sur
+    # d'autres chemins. -w arrime l'assertion au PID du serveur : elle tombe
+    # d'elle-meme a l'arret, sans processus orphelin.
+    # Limite honnete : rabattre l'ecran endort la machine malgre tout.
+    [ -n "$SPID" ] && (caffeinate -i -m -s -w "$SPID" >/dev/null 2>&1 &)
     echo "SERVER READY."
     grep -E "Networking service|Console compatibility|World Name" "$L" | sed 's/.*-> *//'
     echo "Live console       : tmux attach -t $SESSION   (detach: Ctrl+B then D)"
