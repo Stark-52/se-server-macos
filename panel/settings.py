@@ -1927,7 +1927,32 @@ if __name__ == "__main__":
         print("        Si c'est bien ce que tu veux : SE_PANEL_ALLOW_REMOTE=1.", file=sys.stderr)
         sys.exit(2)
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer((HOTE, PORT), H) as s:
+    try:
+        serveur = socketserver.TCPServer((HOTE, PORT), H)
+    except OSError as e:
+        # Cas courant : un panneau tourne deja, oublie dans un autre terminal.
+        # La trace brute d'un "Address already in use" ne le dit pas, et laisse
+        # croire que le port est casse alors qu'il suffit d'ouvrir la page.
+        if e.errno not in (48, 98):                     # EADDRINUSE, BSD et Linux
+            raise
+        print("Le port %d est deja pris." % PORT, file=sys.stderr)
+        deja = None
+        try:
+            deja = subprocess.run(["lsof", "-nP", "-tiTCP:%d" % PORT, "-sTCP:LISTEN"],
+                                  capture_output=True, text=True, timeout=10).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if deja:
+            comm = subprocess.run(["ps", "-o", "comm=", "-p", deja[0]],
+                                  capture_output=True, text=True).stdout.strip()
+            print("        PID %s (%s)" % (deja[0], comm or "?"), file=sys.stderr)
+        print("        Si c'est un panneau oublie, il sert deja http://%s:%d" % (HOTE, PORT),
+              file=sys.stderr)
+        print("        Sinon :  kill %s   ou   SE_PANEL_PORT=%d python3 panel/settings.py"
+              % (deja[0] if deja else "<pid>", PORT + 1), file=sys.stderr)
+        sys.exit(3)
+
+    with serveur as s:
         if not _boucle_locale(HOTE):
             print("ATTENTION : ecoute sur %s, sans authentification." % HOTE, file=sys.stderr)
         print("Panneau de reglages : http://%s:%d" % (HOTE, PORT))
