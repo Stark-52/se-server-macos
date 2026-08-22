@@ -40,6 +40,8 @@ import getpass
 import html
 import http.server
 import ipaddress
+import base64
+import hashlib
 import json
 import os
 import pathlib
@@ -680,6 +682,195 @@ def restaurer(nom, forcer=False):
 
 
 # --------------------------------------------------------------------------
+# Identite du serveur et joueurs
+# --------------------------------------------------------------------------
+# Trois fichiers, trois roles distincts :
+#   SpaceEngineers-Dedicated.cfg  nom du serveur, nom affiche du monde,
+#                                 empreinte du mot de passe, liste des bannis
+#   Saves/<monde>/Sandbox.sbc     joueurs connus et leur niveau de promotion
+# Le .cfg n'est relu qu'au demarrage, et Sandbox.sbc est reecrit depuis la
+# memoire a chaque sauvegarde automatique : toute ecriture passe donc par un
+# arret, comme pour les reglages.
+
+CFG_FICHIER = "SpaceEngineers-Dedicated.cfg"
+
+
+def _cfg_texte():
+    return (INST / CFG_FICHIER).read_text(encoding="utf-8", errors="replace")
+
+
+def _champ(texte, nom):
+    m = re.search(r"<" + nom + r">([^<]*)</" + nom + r">", texte)
+    return m.group(1) if m else None
+
+
+def _pose_champ(texte, nom, valeur):
+    """Remplace un champ simple, ou l'ajoute s'il est absent ou auto-fermant."""
+    v = html.escape(valeur, quote=False)
+    if re.search(r"<" + nom + r">[^<]*</" + nom + r">", texte):
+        return re.sub(r"<" + nom + r">[^<]*</" + nom + r">", "<" + nom + ">" + v + "</" + nom + ">", texte, count=1)
+    if re.search(r"<" + nom + r"\s*/>", texte):
+        return re.sub(r"<" + nom + r"\s*/>", "<" + nom + ">" + v + "</" + nom + ">", texte, count=1)
+    return texte
+
+
+def empreinte_mot_de_passe(mdp):
+    """Sel et cle PBKDF2, en base64, tels que le serveur les attend.
+
+    Deux champs DISTINCTS : <ServerPasswordSalt> et <ServerPasswordHash>.
+    Ce ne sont pas une seule valeur concatenee, et <ServerPassword> en clair
+    n'existe pas. Le mot de passe ne quitte jamais la machine.
+    """
+    sel = os.urandom(16)
+    cle = hashlib.pbkdf2_hmac("sha1", mdp.encode("utf-8"), sel, 10000, 20)
+    return base64.b64encode(sel).decode(), base64.b64encode(cle).decode()
+
+
+def _bannis(texte):
+    m = re.search(r"<Banned\s*/>|<Banned>(.*?)</Banned>", texte, re.S)
+    if not m or not m.group(1):
+        return []
+    return re.findall(r"<unsignedLong>(\d+)</unsignedLong>", m.group(1))
+
+
+def _pose_bannis(texte, ids):
+    if not ids:
+        bloc = "<Banned />"
+    else:
+        bloc = "<Banned>\n" + "".join(
+            "    <unsignedLong>" + i + "</unsignedLong>\n" for i in ids) + "  </Banned>"
+    if re.search(r"<Banned\s*/>", texte):
+        return re.sub(r"<Banned\s*/>", bloc, texte, count=1)
+    return re.sub(r"<Banned>.*?</Banned>", bloc, texte, flags=re.S, count=1)
+
+
+def administration():
+    """Identite du serveur et joueurs connus du monde."""
+    try:
+        cfg = _cfg_texte()
+    except OSError as e:
+        return {"erreur": str(e)[:200], "joueurs": [], "identite": {}}
+    bannis = set(_bannis(cfg))
+    joueurs = []
+    try:
+        sbc = (MONDE_DIR / "Sandbox.sbc").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        sbc = ""
+    motif = (r"<item>\s*<Key>\s*<ClientId>(\d+)</ClientId>\s*<SerialId>(\d+)</SerialId>\s*"
+             r"<HashedId>(\d+)</HashedId>\s*</Key>\s*<Value>\s*<DisplayName>([^<]*)</DisplayName>\s*"
+             r"<IdentityId>(\d+)</IdentityId>(.*?)</Value>")
+    for m in re.finditer(motif, sbc, re.S):
+        niveau = re.search(r"<PromoteLevel>([^<]*)</PromoteLevel>", m.group(6))
+        # Space Engineers prefixe le pseudo d'un glyphe de zone privee (le badge
+        # de plateforme). Il n'existe dans aucune police d'interface et s'affiche
+        # en carre vide : on le retire de l'affichage, pas du fichier.
+        nom = re.sub(r"[\ue000-\uf8ff]", "", m.group(4)).strip()
+        joueurs.append({
+            "nom": nom or m.group(4),
+            "hashedId": m.group(3),
+            "identityId": m.group(5),
+            "niveau": (niveau.group(1) if niveau else "None"),
+            "banni": m.group(3) in bannis,
+        })
+    # un banni qui n'est plus dans la sauvegarde reste listable, sinon il
+    # devient impossible de le debannir depuis le panneau
+    connus = {j["hashedId"] for j in joueurs}
+    for b in bannis - connus if isinstance(bannis, set) else []:
+        joueurs.append({"nom": "(inconnu du monde)", "hashedId": b,
+                        "identityId": "", "niveau": "None", "banni": True})
+    return {
+        "identite": {
+            "ServerName": _champ(cfg, "ServerName") or "",
+            "WorldName": _champ(cfg, "WorldName") or "",
+            "motDePasse": bool(_champ(cfg, "ServerPasswordHash")),
+        },
+        "joueurs": joueurs,
+    }
+
+
+def appliquer_administration(action, forcer=False, **kw):
+    """Ecrit une modification d'identite, de promotion ou de bannissement.
+
+    Comme pour les reglages : arreter d'abord, ecrire ensuite, relancer. Le
+    .cfg n'est relu qu'au demarrage et Sandbox.sbc est reecrit depuis la
+    memoire a chaque sauvegarde : ecrire pendant que le serveur tourne serait
+    annule sans le moindre message.
+    """
+    arret, demarrage = ROOT / "scripts/stop.sh", ROOT / "scripts/start.sh"
+    for s in (arret, demarrage):
+        if not s.is_file():
+            return {"ok": False, "erreur": "script introuvable : " + str(s)}
+
+    r = subprocess.run(["bash", str(arret)] + (["--force"] if forcer else []),
+                       capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        detail = " ".join(((r.stdout or "") + " " + (r.stderr or "")).split())
+        return {"ok": False, "arretRefuse": True,
+                "erreur": "arret refuse, rien n'a ete ecrit : " + detail[:500]}
+
+    resume = []
+    try:
+        cfg_f = INST / CFG_FICHIER
+        cfg = _cfg_texte()
+
+        if action == "identite":
+            for champ in ("ServerName", "WorldName"):
+                v = kw.get(champ)
+                if v is not None and v != "":
+                    cfg = _pose_champ(cfg, champ, v)
+                    resume.append(champ + " = " + v)
+            cfg_f.write_text(cfg, encoding="utf-8")
+
+        elif action == "motdepasse":
+            mdp = kw.get("motDePasse") or ""
+            if mdp:
+                sel, cle = empreinte_mot_de_passe(mdp)
+                cfg = _pose_champ(cfg, "ServerPasswordSalt", sel)
+                cfg = _pose_champ(cfg, "ServerPasswordHash", cle)
+                resume.append("mot de passe change")
+            else:
+                cfg = _pose_champ(cfg, "ServerPasswordSalt", "")
+                cfg = _pose_champ(cfg, "ServerPasswordHash", "")
+                resume.append("mot de passe retire")
+            cfg_f.write_text(cfg, encoding="utf-8")
+
+        elif action == "bannir":
+            cible, etat = str(kw.get("hashedId") or ""), bool(kw.get("banni"))
+            if not cible.isdigit():
+                raise ValueError("identifiant de joueur invalide")
+            ids = _bannis(cfg)
+            ids = ([i for i in ids if i != cible] + ([cible] if etat else []))
+            cfg_f.write_text(_pose_bannis(cfg, ids), encoding="utf-8")
+            resume.append(("banni " if etat else "debanni ") + cible)
+
+        elif action == "promouvoir":
+            cible, niveau = str(kw.get("hashedId") or ""), kw.get("niveau")
+            if niveau not in ("None", "Admin"):
+                raise ValueError("niveau attendu : None ou Admin")
+            f = MONDE_DIR / "Sandbox.sbc"
+            sbc = f.read_text(encoding="utf-8", errors="replace")
+            motif = (r"(<HashedId>" + re.escape(cible) + r"</HashedId>.*?<PromoteLevel>)"
+                     r"([^<]*)(</PromoteLevel>)")
+            neuf, n = re.subn(motif, lambda m: m.group(1) + niveau + m.group(3), sbc, count=1, flags=re.S)
+            if not n:
+                raise ValueError("joueur introuvable dans la sauvegarde : " + cible)
+            f.write_text(neuf, encoding="utf-8")
+            b5 = MONDE_DIR / "SANDBOX_0_0_0_.sbsB5"
+            if b5.exists():
+                b5.unlink()
+            resume.append(cible + " -> " + niveau)
+        else:
+            raise ValueError("action inconnue : " + str(action))
+
+    except (OSError, ValueError, re.error) as e:
+        subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+        return {"ok": False, "erreur": str(e)[:300]}
+
+    subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+    return {"ok": True, "resume": resume}
+
+
+# --------------------------------------------------------------------------
 # Interface
 # --------------------------------------------------------------------------
 PAGE = r"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
@@ -775,6 +966,15 @@ h1{font-family:var(--font-cond);font-size:clamp(1.6rem,4.5vw,2.3rem);
 /* ---- ecrans d'etat ---- */
 .shell > #inventaire{display:flex;flex-direction:column;gap:1.6rem}
 #inventaire section{display:flex;flex-direction:column;gap:.7rem}
+.champ-ligne{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;padding:.5rem .8rem;border-top:1px solid var(--line-soft)}
+.champ-ligne:first-child{border-top:0}
+.champ-ligne label{font-size:.86rem;min-width:12rem}
+.champ-ligne input{flex:1;min-width:12rem}
+.champ-ligne .cle{flex-basis:100%;margin:0}
+.pastille{font-family:var(--font-mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;
+  padding:.14rem .4rem;border-radius:2px;border:1px solid var(--line)}
+.pastille.admin{border-color:var(--signal);color:var(--signal)}
+.pastille.banni{border-color:var(--stop);color:var(--stop)}
 .mini{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
   padding:.28rem .55rem;border:1px solid var(--line);border-radius:2px;background:var(--panel2);
   color:var(--soft);cursor:pointer;white-space:nowrap}
@@ -952,6 +1152,7 @@ footer.meta{font-family:var(--font-mono);font-size:.7rem;color:var(--muted);
 
 <script>
 var SCHEMA=[],VALS={},RISQUES={},chrono=null;
+var MONDE_NOM="__MONDE__";
 
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function el(id){return document.getElementById(id);}
@@ -1109,10 +1310,64 @@ function invConfirmer(n){
   c.querySelector("[data-annule]").onclick=function(){inventaire();};
   c.querySelector("[data-conf]").onclick=function(){invAction(n,f);};
 }
+function admAction(corps,libelle){
+  document.querySelectorAll("#inventaire .mini,#inventaire input").forEach(function(x){x.disabled=true;});
+  el("msg").textContent=libelle+" en cours, le serveur redemarre...";
+  corps.forcer=!!(el("forcer")&&el("forcer").checked);
+  fetch("/api/administration",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify(corps)}).then(function(x){return x.json();}).then(function(r){
+      el("msg").textContent=r.ok?(libelle+" applique : "+(r.resume||[]).join(", "))
+        :((r.arretRefuse?"ARRET REFUSE, rien n a ete ecrit  —  ":"echec  —  ")+(r.erreur||""));
+      charger();inventaire();
+    }).catch(function(){el("msg").textContent="echec reseau";inventaire();});
+}
+function rendreAdmin(a){
+  var id=a.identite||{},js=a.joueurs||[],h="";
+  h+="<section>"+secHead("S1","Serveur","identite et acces")+"<div class=\"tbl\" style=\"padding:.2rem 0\">"+
+     "<div class=\"champ-ligne\"><label for=\"a_sn\">Nom du serveur</label>"+
+     "<input id=\"a_sn\" type=\"text\" value=\""+esc(id.ServerName||"")+"\">"+
+     "<button type=\"button\" class=\"mini\" id=\"a_sn_b\">Enregistrer</button>"+
+     "<code class=\"cle\">ServerName  —  ce que voient les joueurs dans la liste des serveurs</code></div>"+
+     "<div class=\"champ-ligne\"><label for=\"a_wn\">Nom affiche du monde</label>"+
+     "<input id=\"a_wn\" type=\"text\" value=\""+esc(id.WorldName||"")+"\">"+
+     "<button type=\"button\" class=\"mini\" id=\"a_wn_b\">Enregistrer</button>"+
+     "<code class=\"cle\">WorldName  —  n est pas le nom du DOSSIER du monde, qui reste "+esc(MONDE_NOM)+"</code></div>"+
+     "<div class=\"champ-ligne\"><label for=\"a_mp\">Mot de passe</label>"+
+     "<input id=\"a_mp\" type=\"password\" autocomplete=\"new-password\" placeholder=\""+
+     (id.motDePasse?"un mot de passe est defini":"aucun mot de passe")+"\">"+
+     "<button type=\"button\" class=\"mini\" id=\"a_mp_b\">Changer</button>"+
+     "<button type=\"button\" class=\"mini danger\" id=\"a_mp_r\">Retirer</button>"+
+     "<code class=\"cle\">calcule en local, PBKDF2-HMAC-SHA1 ; il n est jamais stocke ni envoye en clair</code></div>"+
+     "</div></section>";
+
+  h+="<section>"+secHead("S2","Joueurs",js.length+" connus du monde")+"<div class=\"wrap\"><table class=\"tbl\">"+
+     "<tr><th></th><th>Joueur</th><th>Identifiant</th><th></th></tr>";
+  for(var i=0;i<js.length;i++){
+    var j=js[i];
+    var p=(j.niveau==="Admin"?"<span class=\"pastille admin\">admin</span> ":"")+
+          (j.banni?"<span class=\"pastille banni\">banni</span> ":"");
+    h+="<tr><td class=\"num\">"+(i+1)+"</td><td>"+p+esc(j.nom)+"</td>"+
+       "<td class=\"droite\">"+esc(j.hashedId)+"</td><td><div class=\"actions\">"+
+       "<button type=\"button\" class=\"mini\" data-prom=\""+esc(j.hashedId)+"\" data-niv=\""+
+       (j.niveau==="Admin"?"None":"Admin")+"\">"+(j.niveau==="Admin"?"Retirer admin":"Passer admin")+"</button>"+
+       "<button type=\"button\" class=\"mini"+(j.banni?"":" danger")+"\" data-ban=\""+esc(j.hashedId)+"\" data-etat=\""+
+       (j.banni?"0":"1")+"\">"+(j.banni?"Debannir":"Bannir")+"</button>"+
+       "</div></td></tr>";
+  }
+  if(!js.length)h+="<tr><td colspan=\"4\" class=\"sansnom\">Aucun joueur connu. Un joueur apparait apres sa premiere connexion.</td></tr>";
+  h+="</table></div><p class=\"aide\">Chaque action arrete le serveur, ecrit, puis relance. "+
+     "Les promotions vivent dans la sauvegarde et sont propres a CE monde : changer de monde les remet a zero. "+
+     "Le bannissement vit dans la configuration du serveur et vaut pour tous les mondes.</p></section>";
+  return h;
+}
 function inventaire(){
-  fetch("/api/inventaire").then(function(x){return x.json();}).then(function(r){
-    var h="",s=r.sauvegardes||{},m=r.mods||{},lignes=s.liste||[];
-    h+="<section>"+secHead("S1","Sauvegardes",(s.nombre||0)+" au total, "+(s.total||"0 o"))+
+  Promise.all([fetch("/api/administration").then(function(x){return x.json();}),
+               fetch("/api/inventaire").then(function(x){return x.json();})])
+  .then(function(res){
+    var a=res[0]||{},r=res[1]||{};
+    var h=rendreAdmin(a);
+    var s=r.sauvegardes||{},m=r.mods||{},lignes=s.liste||[];
+    h+="<section>"+secHead("S3","Sauvegardes",(s.nombre||0)+" au total, "+(s.total||"0 o"))+
        "<div class=\"wrap\"><table class=\"tbl\">"+
        "<tr><th></th><th>Horodatage</th><th class=\"droite\">Fichiers</th><th class=\"droite\">Taille</th><th></th></tr>";
     if(s.vif){
@@ -1130,14 +1385,12 @@ function inventaire(){
          "</div></td></tr>";
     }
     if(!lignes.length)h+="<tr><td colspan=\"5\" class=\"sansnom\">Aucune sauvegarde automatique pour le moment.</td></tr>";
-    h+="</table></div>"+
-       "<p class=\"aide\">Restaurer arrete le serveur, met le monde actuel de cote dans Backup/ sous un nom horodate, "+
-       "remet la sauvegarde choisie, puis relance. Une restauration se defait donc par une autre restauration. "+
-       "Le garde-fou d age de sauvegarde s applique, et la case forcer de la barre du bas le leve.</p></section>";
+    h+="</table></div><p class=\"aide\">Restaurer arrete le serveur, met le monde actuel de cote dans Backup/ sous un nom "+
+       "horodate, remet la sauvegarde choisie, puis relance. Une restauration se defait donc par une autre restauration.</p></section>";
 
     var lm=m.liste||[];
     var note=m.sansNom?((m.nombre||0)+" actifs, "+m.sansNom+" sans nom connu"):((m.nombre||0)+" actifs");
-    h+="<section>"+secHead("S2","Mods",note)+"<div class=\"wrap\"><table class=\"tbl\">"+
+    h+="<section>"+secHead("S4","Mods",note)+"<div class=\"wrap\"><table class=\"tbl\">"+
        "<tr><th></th><th>Nom</th><th>Identifiant</th></tr>";
     for(var k=0;k<lm.length;k++){
       var nn=lm[k].nom?esc(lm[k].nom):"<span class=\"sansnom\">nom inconnu, pas encore journalise par le serveur</span>";
@@ -1148,10 +1401,23 @@ function inventaire(){
     h+="</table></div><p class=\"aide\">Ordre de chargement. Space Engineers applique les mods de haut en bas, "+
        "le dernier gagne en cas de conflit. Les noms viennent du journal du serveur, pas du reseau.</p></section>";
     el("inventaire").innerHTML=h;
+
     var inv=el("inventaire");
     inv.querySelectorAll("[data-ouvre]").forEach(function(b){b.onclick=function(){invOuvrir(b.dataset.ouvre);};});
     inv.querySelectorAll("[data-rest]").forEach(function(b){b.onclick=function(){invConfirmer(b.dataset.rest);};});
     var v=inv.querySelector("[data-vif]");if(v)v.onclick=function(){invOuvrir("");};
+    inv.querySelectorAll("[data-prom]").forEach(function(b){b.onclick=function(){
+      admAction({action:"promouvoir",hashedId:b.dataset.prom,niveau:b.dataset.niv},"promotion");};});
+    inv.querySelectorAll("[data-ban]").forEach(function(b){b.onclick=function(){
+      admAction({action:"bannir",hashedId:b.dataset.ban,banni:b.dataset.etat==="1"},
+                b.dataset.etat==="1"?"bannissement":"debannissement");};});
+    el("a_sn_b").onclick=function(){admAction({action:"identite",ServerName:el("a_sn").value.trim()},"nom du serveur");};
+    el("a_wn_b").onclick=function(){admAction({action:"identite",WorldName:el("a_wn").value.trim()},"nom du monde");};
+    el("a_mp_b").onclick=function(){
+      var v=el("a_mp").value;
+      if(!v){el("msg").textContent="saisis un mot de passe avant de valider";return;}
+      admAction({action:"motdepasse",motDePasse:v},"mot de passe");};
+    el("a_mp_r").onclick=function(){admAction({action:"motdepasse",motDePasse:""},"retrait du mot de passe");};
   }).catch(function(){});
 }
 el("recharger").onclick=function(){charger();inventaire();};
@@ -1225,6 +1491,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._garde():
             return
+        if self.path.startswith("/api/administration"):
+            return self._j(administration())
         if self.path.startswith("/api/inventaire"):
             return self._j({"sauvegardes": sauvegardes(), "mods": mods()})
         if self.path.startswith("/api/etat"):
@@ -1241,7 +1509,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if not (self.path.startswith("/api/appliquer")
                 or self.path.startswith("/api/restaurer")
-                or self.path.startswith("/api/reveler")):
+                or self.path.startswith("/api/reveler")
+                or self.path.startswith("/api/administration")):
             return self._j({"ok": False}, 404)
         if not self._garde(json_requis=True):
             return
@@ -1255,6 +1524,13 @@ class H(http.server.BaseHTTPRequestHandler):
         if not isinstance(recu, dict):
             return self._j({"ok": False, "erreur": "JSON attendu : un objet."})
 
+        if self.path.startswith("/api/administration"):
+            act = recu.get("action")
+            return self._j(appliquer_administration(
+                act, bool(recu.get("forcer")),
+                ServerName=recu.get("ServerName"), WorldName=recu.get("WorldName"),
+                motDePasse=recu.get("motDePasse"), hashedId=recu.get("hashedId"),
+                niveau=recu.get("niveau"), banni=recu.get("banni")))
         if self.path.startswith("/api/reveler"):
             return self._j(reveler(recu.get("sauvegarde")))
         if self.path.startswith("/api/restaurer"):

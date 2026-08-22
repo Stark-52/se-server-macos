@@ -115,9 +115,10 @@ it the same way, so one file configures both and they cannot end up pointing at
 two different worlds. Its values are shell variables, not exported ones:
 sourcing it in your own shell does not, by itself, configure anything else.
 
-There is deliberately no variable for the server name or the password. Nothing
-in this repository writes `SpaceEngineers-Dedicated.cfg`, and the password only
-ever exists in it as a hash and a salt; see [Password](#password).
+There is deliberately no variable for the server name or the password: they are
+not per-installation configuration, they are server state. The settings panel
+edits both directly in `SpaceEngineers-Dedicated.cfg`, and the password only
+ever exists there as a hash and a salt; see [Password](#password).
 
 Any variable can also be overridden per invocation:
 
@@ -400,11 +401,28 @@ silently). `--force` overrides both.
 
     python3 panel/settings.py     ->  http://127.0.0.1:8777 (SE_PANEL_PORT)
 
-A local page that reads 31 world settings, presents them grouped with a label
+A local page that reads 36 world settings, presents them grouped with a label
 and a help line each, then stops the server, rewrites them into the three files
 and starts it again. Settings are grouped into yield, survival, world, limits and
 performance, and the dangerous ones carry a warning stripe (permanent death,
 selective physics, trash removal).
+
+Four more sections sit below the settings:
+
+- **Server** edits the server name and the world's display name, and sets or
+  clears the password. The password is hashed locally, into the two separate
+  fields the server expects, and never stored or sent in clear.
+- **Players** lists everyone the world knows, with their promotion level and
+  ban state, and toggles either one. Promotions live in the save and are
+  therefore per world; bans live in the server config and apply to every world.
+- **Backups** lists `Backup/`, reveals a backup in Finder, and restores one.
+  Restoring moves the current world into `Backup/` under a timestamped name
+  first, so a restore is undone by another restore.
+- **Mods** lists the active mods in load order. The world stores only numeric
+  ids, `Mods/` is empty on a dedicated install and the cache is named by number,
+  so the names are read from the server's own log. No network call, no mod.io
+  key: the public API refuses every request without one, and a URL built from a
+  numeric id redirects to the game's catalogue.
 
 It reads the same `config.sh` as the scripts, sourced the way
 `scripts/common.sh` sources it, so `SE_WORLD`, `SE_PREFIX` and the `SE_PANEL_*`
