@@ -1806,7 +1806,33 @@ class H(http.server.BaseHTTPRequestHandler):
     server_version = "SEPanel/1.0"
 
     def log_message(self, *a):
+        # Les GET sont interroges en boucle par la page : les journaliser
+        # noierait le seul evenement qui compte. Les POST le sont dans do_POST,
+        # avec l'action demandee.
         pass
+
+    def _trace(self, quoi):
+        """Trace une action qui touche au serveur.
+
+        Sans elle le panneau est une boite noire : quand le serveur s'arrete,
+        rien ne permet de dire si une requete l'a demande ou si le jeu est
+        tombe seul. C'est exactement la question qui s'est posee le 22/08.
+
+        Sur la sortie d'erreur ET dans un fichier : la sortie d'erreur part
+        avec la fenetre qui a lance le panneau, et c'est justement plusieurs
+        heures apres qu'on vient chercher la reponse.
+        """
+        ligne = "%s  %s  depuis %s" % (
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            quoi, self.client_address[0])
+        print(ligne, file=sys.stderr, flush=True)
+        try:
+            journal = ROOT / "logs"
+            journal.mkdir(exist_ok=True)
+            with (journal / "panel.log").open("a", encoding="utf-8") as f:
+                f.write(ligne + "\n")
+        except OSError:
+            pass                                # tracer ne doit jamais bloquer
 
     def _j(self, obj, code=200):
         b = json.dumps(obj).encode()
@@ -1875,6 +1901,8 @@ class H(http.server.BaseHTTPRequestHandler):
 
         if self.path.startswith("/api/administration"):
             act = recu.get("action")
+            self._trace("administration %s (mod=%s, joueur=%s)"
+                        % (act, recu.get("mod"), recu.get("hashedId")))
             return self._j(appliquer_administration(
                 act, bool(recu.get("forcer")),
                 ServerName=recu.get("ServerName"), WorldName=recu.get("WorldName"),
@@ -1882,10 +1910,13 @@ class H(http.server.BaseHTTPRequestHandler):
                 niveau=recu.get("niveau"), banni=recu.get("banni"),
                 mod=recu.get("mod"), nomMod=recu.get("nomMod")))
         if self.path.startswith("/api/serveur"):
+            self._trace("serveur %s (forcer=%s)" % (recu.get("action"), bool(recu.get("forcer"))))
             return self._j(commander_serveur(recu.get("action"), bool(recu.get("forcer"))))
         if self.path.startswith("/api/reveler"):
             return self._j(reveler(recu.get("sauvegarde"), recu.get("quoi")))
         if self.path.startswith("/api/restaurer"):
+            self._trace("restaurer %s (forcer=%s)"
+                        % (recu.get("sauvegarde"), bool(recu.get("forcer"))))
             return self._j(restaurer(recu.get("sauvegarde"), bool(recu.get("forcer"))))
 
         # Corps attendu : {"valeurs": {...}, "forcer": true|false}. Un objet
@@ -1897,6 +1928,7 @@ class H(http.server.BaseHTTPRequestHandler):
         else:
             vals, forcer = recu, False
 
+        self._trace("appliquer %d reglage(s)" % (len(vals) if isinstance(vals, dict) else 0))
         souci = probleme()
         if souci:
             return self._j({"ok": False, "erreur": souci})
