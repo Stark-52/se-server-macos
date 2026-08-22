@@ -268,61 +268,272 @@ DELAI_DEMARRAGE = 3000
 # --------------------------------------------------------------------------
 REGLAGES = [
  ("Rendement", [
-  ("InventorySizeMultiplier",      "Taille des inventaires", "num", "Multiplie la capacite du perso et des conteneurs. 1 = vanilla, 10 = confortable."),
-  ("AssemblerSpeedMultiplier",     "Vitesse assembleurs",    "num", "Rapidite de fabrication."),
-  ("AssemblerEfficiencyMultiplier","Rendement assembleurs",  "num", "Moins de minerai par composant."),
-  ("RefinerySpeedMultiplier",      "Vitesse raffineries",    "num", "Rapidite de raffinage."),
-  ("WelderSpeedMultiplier",        "Vitesse soudeuses",      "num", "Rapidite de construction."),
-  ("GrinderSpeedMultiplier",       "Vitesse meuleuses",      "num", "Rapidite de demontage."),
-  ("HackSpeedMultiplier",          "Vitesse de piratage",    "num", "Prise de controle des blocs ennemis. Bas = long."),
+  ("InventorySizeMultiplier", "Taille des inventaires", "num", "Multiplie la capacite du perso et des conteneurs. 1 = vanilla, 10 = confortable."),
+  ("BlocksInventorySizeMultiplier", "Inventaire des blocs", "num", "Capacite des conteneurs et des blocs, independamment de celle du personnage."),
+  ("AssemblerSpeedMultiplier", "Vitesse assembleurs", "num", "Rapidite de fabrication."),
+  ("AssemblerEfficiencyMultiplier", "Rendement assembleurs", "num", "Moins de minerai par composant."),
+  ("RefinerySpeedMultiplier", "Vitesse raffineries", "num", "Rapidite de raffinage."),
+  ("WelderSpeedMultiplier", "Vitesse soudeuses", "num", "Rapidite de construction."),
+  ("GrinderSpeedMultiplier", "Vitesse meuleuses", "num", "Rapidite de demontage."),
+  ("HackSpeedMultiplier", "Vitesse de piratage", "num", "Rapidite pour prendre le controle d'un bloc ennemi."),
+  ("HarvestRatioMultiplier", "Rendement du forage", "num", "Part du minerai reellement recuperee. Sous 1, la roche rend moins que ce qu'elle contient."),
+  ("CharacterSpeedMultiplier", "Vitesse du personnage", "num", ""),
+  ("EnvironmentDamageMultiplier", "Degats de l'environnement", "num", "Chutes, collisions, brulures."),
+  ("SpawnShipTimeMultiplier", "Delai des vaisseaux de secours", "num", "0 = disponible immediatement."),
  ]),
  ("Survie", [
-  ("FoodConsumptionRate",  "Vitesse de la faim",       "num",  "0 = desactive. 0.5 = ce que livre Keen. Plus haut = on meurt plus vite."),
-  ("EnableSurvivalBuffs",  "Barre de nourriture",      "bool", "Systeme de faim et de buffs de la MAJ Apex Survival."),
-  ("AutoHealing",          "Regeneration auto",        "bool", "Le perso se soigne seul dans un cockpit pressurise."),
-  ("EnableOxygen",         "Oxygene",                  "bool", "Gestion de l'oxygene."),
-  ("EnableRespawnShips",   "Vaisseaux de secours",     "bool", "Reapparition avec un vaisseau. A garder actif."),
-  ("PermanentDeath",       "Mort definitive",          "bool", "Perte du personnage a la mort. Brutal."),
+  ("FoodConsumptionRate", "Vitesse de la faim", "num", "Rythme auquel la barre de nourriture descend."),
+  ("EnableSurvivalBuffs", "Barre de nourriture", "bool", "Desactive, plus de faim ni de soif."),
+  ("AutoHealing", "Regeneration auto", "bool", "Le personnage se soigne seul dans un espace pressurise."),
+  ("EnableOxygen", "Oxygene", "bool", ""),
+  ("EnableOxygenPressurization", "Pressurisation", "bool", "Les pieces etanches se remplissent d'air. Sans ca, l'oxygene ne sert qu'aux reservoirs."),
+  ("EnableJetpack", "Jetpack", "bool", ""),
+  ("EnableRadiation", "Radiations", "bool", ""),
+  ("EnableRespawnShips", "Vaisseaux de secours", "bool", "Reapparition avec une petite nacelle."),
+  ("PermanentDeath", "Mort definitive", "bool", "A LA MORT, LE PERSONNAGE ET SES BLOCS SONT PERDUS."),
+  ("EnableAutorespawn", "Reapparition automatique", "bool", ""),
+  ("EnableReducedStatsOnRespawn", "Statistiques reduites a la reapparition", "bool", "On revient affame et assoiffe."),
+  ("EnableSpaceSuitRespawn", "Reapparition en scaphandre", "bool", "Reapparaitre en combinaison plutot que dans un lit medical."),
+  ("StartInRespawnScreen", "Demarrer sur l'ecran de reapparition", "bool", ""),
+  ("SpawnWithTools", "Reapparaitre avec les outils", "bool", ""),
+  ("RespawnShipDelete", "Supprimer l'ancien vaisseau de secours", "bool", "A la reapparition, le precedent est efface."),
+  ("BackpackDespawnTimer", "Disparition du sac (min)", "num", "Duree avant que le sac laisse a la mort ne s'efface."),
+ ]),
+ ("Interface", [
+  ("Enable3rdPersonView", "Vue a la troisieme personne", "bool", ""),
+  ("ShowPlayerNamesOnHud", "Noms des joueurs sur l'ATH", "bool", ""),
+  ("EnemyTargetIndicatorDistance", "Distance d'indicateur d'ennemi (m)", "num", ""),
+  ("MaxHudChatMessageCount", "Messages de chat affiches", "num", ""),
+  ("EnableGoodBotHints", "Conseils du bot d'aide", "bool", ""),
+  ("EnableGamepadAimAssist", "Aide a la visee manette", "bool", ""),
+  ("OffensiveWordsFiltering", "Filtre des mots offensants", "bool", ""),
+  ("EnableFactionPlayerNames", "Nom de faction devant les pseudos", "bool", ""),
+  ("RealisticSound", "Son realiste", "bool", "Pas de son dans le vide."),
+  ("EnableSpectator", "Mode spectateur", "bool", "Camera libre. Donne une vision complete de la carte a qui l'active."),
  ]),
  ("Monde", [
-  ("MaxPlayers",            "Joueurs maximum",         "num",  ""),
-  ("AutoSaveInMinutes",     "Sauvegarde auto (min)",   "num",  "Ce qui n'est pas sauvegarde est perdu a l'arret du serveur."),
-  ("EnvironmentHostility",  "Hostilite",               "choix","Meteorites. CATACLYSM et ARMAGEDDON rasent les bases.",
-     ["SAFE","NORMAL","CATACLYSM","ARMAGEDDON"]),
-  ("EnableEconomy",         "Economie",                "bool", "Stations commerciales et contrats."),
-  ("EnableIngameScripts",   "Scripts in-game",         "bool", "Bloc programmable. Force le mode Experimental."),
-  ("EnableDrones",          "Drones",                  "bool", ""),
-  ("EnableSpiders",         "Araignees",               "bool", "Un mod de rencontres peut reprendre ce reglage a son compte."),
-  ("EnableWolfs",           "Loups",                   "bool", "Un mod de rencontres peut reprendre ce reglage a son compte."),
-  ("EnableCopyPaste",       "Copier-coller",           "bool", "Mode creatif. A laisser desactive en survie."),
+  ("GameMode", "Mode de jeu", "choix", "Creatif donne les ressources infinies et la construction instantanee a tout le monde.", ["Survival", "Creative"]),
+  ("MaxPlayers", "Joueurs maximum", "num", ""),
+  ("AutoSaveInMinutes", "Sauvegarde auto (min)", "num", "Ce qui n'est pas sauvegarde est perdu a l'arret du serveur."),
+  ("EnableSaving", "Sauvegarde activee", "bool", "A LAISSER ACTIF. Desactive, rien n'est jamais ecrit sur le disque."),
+  ("EnvironmentHostility", "Hostilite", "choix", "Meteorites. CATACLYSM et ARMAGEDDON rasent les bases.", ["SAFE", "NORMAL", "CATACLYSM", "ARMAGEDDON"]),
+  ("ExperimentalMode", "Mode experimental", "bool", "Requis par les scripts in-game et plusieurs reglages ci-dessous."),
+  ("DestructibleBlocks", "Blocs destructibles", "bool", ""),
+  ("EnableConvertToStation", "Conversion en station", "bool", "Transformer un vaisseau en station, qui ne bouge plus."),
+  ("EnableSupergridding", "Supergridding", "bool", "Permet d'imbriquer petite et grande grille. Exploit connu, casse l'equilibre."),
+  ("EnableRemoteBlockRemoval", "Retrait de bloc a distance", "bool", ""),
+  ("EnableIngameScripts", "Scripts in-game", "bool", "Bloc programmable. Force le mode Experimental."),
+  ("EnableScripterRole", "Role scripteur", "bool", "Restreint le bloc programmable aux joueurs promus Scripter."),
+  ("EnableResearch", "Recherche", "bool", "Les blocs se debloquent en construisant, au lieu d'etre tous disponibles."),
+  ("EnableCopyPaste", "Copier-coller", "bool", "Mode creatif. A laisser desactive en survie."),
+  ("BlueprintShare", "Partage de plans", "bool", ""),
+  ("BlueprintShareTimeout", "Delai de partage de plans (s)", "num", ""),
+  ("FamilySharing", "Partage familial Steam", "bool", ""),
+  ("CanJoinRunning", "Rejoindre en cours de partie", "bool", "Ne concerne que les scenarios."),
+  ("WorldSizeKm", "Taille du monde (km)", "num", "0 = illimite. Au-dela, une barriere invisible."),
+  ("MinimumWorldSize", "Taille minimale du monde (km)", "num", ""),
+  ("Scenario", "Monde de scenario", "bool", "Change les regles de session. Ne pas activer sur un monde de survie."),
+  ("ScenarioEditMode", "Mode edition de scenario", "bool", "Ne pas activer sur un monde de survie."),
  ]),
- ("Limites", [
-  ("TotalPCU",           "PCU total",           "num",  "Budget de blocs du monde. A monter pour les tres grosses constructions."),
-  ("MaxGridSize",        "Taille max d'une grille","num","0 = illimite."),
-  ("BlockLimitsEnabled", "Limites de blocs",    "choix","", ["NONE","GLOBALLY","PER_PLAYER","PER_FACTION"]),
-  ("MaxFloatingObjects", "Objets flottants max","num",  "Debris libres toleres avant nettoyage."),
-  ("MaxBackupSaves",     "Sauvegardes de secours","num",""),
+ ("Mecanique", [
+  ("EnableShareInertiaTensor", "Partage du tenseur d'inertie", "bool",
+   "Quand c'est desactive, la case du meme nom N'APPARAIT PAS sur les rotors, pistons et "
+   "charnieres : le reglage du monde commande l'affichage de l'option sur le bloc. Active, "
+   "il stabilise les bras et les grues, au prix de calculs de physique en plus."),
+  ("EnableSubgridDamage", "Degats entre sous-grilles", "bool",
+   "Une sous-grille qui heurte sa grille mere lui fait des degats. Desactive, les bras "
+   "articules cessent de detruire ce qu'ils touchent."),
+  ("EnableUnsafeRotorTorques", "Couples de rotor sans limite", "bool",
+   "Leve le plafond de couple. Sert aux grosses machines, et c'est aussi ce qui envoie une "
+   "construction dans l'espace quand la physique decroche."),
+  ("EnableUnsafePistonImpulses", "Impulsions de piston sans limite", "bool", "Meme chose pour les pistons."),
+  ("AdjustableMaxVehicleSpeed", "Vitesse max des vehicules ajustable", "bool", ""),
+ ]),
+ ("Blocs et limites", [
+  ("TotalPCU", "PCU total", "num", "Budget de blocs du monde. A monter pour les tres grosses constructions."),
+  ("UseConsolePCU", "PCU version console", "bool", "Impose le bareme PCU des consoles. Coherent avec un monde crossplay."),
+  ("MaxGridSize", "Taille max d'une grille", "num", "0 = illimite."),
+  ("BlockLimitsEnabled", "Limites de blocs", "choix", "", ["NONE", "GLOBALLY", "PER_PLAYER", "PER_FACTION"]),
+  ("MaxBlocksPerPlayer", "Blocs max par joueur", "num", "0 = illimite."),
+  ("MaxFloatingObjects", "Objets flottants max", "num", "Debris libres toleres avant nettoyage."),
+  ("MaxBackupSaves", "Sauvegardes de secours", "num", ""),
+  ("MaxProductionQueueLength", "File de production max", "num", ""),
+  ("BlockCountThreshold", "Seuil de comptage de blocs", "num", "Sous ce nombre, une grille compte comme un debris."),
+  ("OptimalGridCount", "Nombre de grilles optimal", "num", "0 = pas de cible."),
+  ("StationVoxelSupport", "Stations ancrees au voxel", "bool", "Une station posee sur du terrain reste immobile sans support."),
+  ("EnablePcuTrading", "Echange de PCU entre joueurs", "bool", ""),
+ ]),
+ ("Armes et degats", [
+  ("WeaponsEnabled", "Armes", "bool", ""),
+  ("EnableFriendlyFire", "Tir allie", "bool", ""),
+  ("EnableTurretsFriendlyFire", "Tourelles tirent sur les allies", "bool", ""),
+  ("InfiniteAmmo", "Munitions infinies", "bool", ""),
+  ("EnableRecoil", "Recul des armes", "bool", ""),
+  ("ThrusterDamage", "Degats des propulseurs", "bool", "Le souffle abime ce qui est derriere."),
+  ("EnableVoxelDestruction", "Destruction du voxel", "bool", "Les explosions et les forages creusent le terrain."),
+ ]),
+ ("PNJ et rencontres", [
+  ("EnableEncounters", "Rencontres spatiales", "bool", ""),
+  ("EnablePlanetaryEncounters", "Rencontres planetaires", "bool", ""),
+  ("CargoShipsEnabled", "Cargos", "bool", "Vaisseaux de transport qui traversent la carte."),
+  ("EnableOrca", "Orca", "bool", ""),
+  ("EnableDrones", "Drones", "bool", ""),
+  ("MaxDrones", "Drones max", "num", ""),
+  ("TotalBotLimit", "Bots max", "num", ""),
+  ("EnableSpiders", "Araignees", "bool", "Un mod de rencontres peut reprendre ce reglage a son compte."),
+  ("EnableWolfs", "Loups", "bool", "Un mod de rencontres peut reprendre ce reglage a son compte."),
+  ("EnableContainerDrops", "Largages de conteneurs", "bool", ""),
+  ("MinDropContainerRespawnTime", "Delai min entre largages (min)", "num", ""),
+  ("MaxDropContainerRespawnTime", "Delai max entre largages (min)", "num", ""),
+  ("ScrapEnabled", "Epaves et ferraille", "bool", ""),
+  ("NPCGridClaimTimeLimit", "Appropriation d'une grille PNJ (min)", "num", ""),
+  ("PiratePCU", "PCU des pirates", "num", "Budget de blocs alloue aux constructions pirates."),
+  ("EncounterDensity", "Densite des rencontres", "num", ""),
+  ("EncounterGeneratorVersion", "Version du generateur de rencontres", "num", "Technique. Ne pas changer sur un monde en cours."),
+  ("GlobalEncounterCap", "Rencontres globales max", "num", "0 = illimite."),
+  ("GlobalEncounterPCU", "PCU des rencontres globales", "num", ""),
+  ("GlobalEncounterTimer", "Periode des rencontres globales (min)", "num", ""),
+  ("GlobalEncounterEnableRemovalTimer", "Retrait auto des rencontres globales", "bool", ""),
+  ("GlobalEncounterMinRemovalTimer", "Retrait global, minimum (min)", "num", ""),
+  ("GlobalEncounterMaxRemovalTimer", "Retrait global, maximum (min)", "num", ""),
+  ("GlobalEncounterRemovalTimeClock", "Horloge de retrait global (min)", "num", ""),
+  ("PlanetaryEncounterTimerFirst", "Premiere rencontre planetaire (min)", "num", ""),
+  ("PlanetaryEncounterTimerMin", "Rencontre planetaire, minimum (min)", "num", ""),
+  ("PlanetaryEncounterTimerMax", "Rencontre planetaire, maximum (min)", "num", ""),
+  ("PlanetaryEncounterDespawnTimeout", "Disparition d'une rencontre planetaire (min)", "num", ""),
+  ("PlanetaryEncounterDesiredSpawnRange", "Distance d'apparition visee (m)", "num", ""),
+  ("PlanetaryEncounterPresenceRange", "Rayon de presence (m)", "num", ""),
+  ("PlanetaryEncounterAreaLockdownRange", "Rayon de verrouillage de zone (m)", "num", ""),
+  ("PlanetaryEncounterExistingStructuresRange", "Distance aux constructions existantes (m)", "num", ""),
+ ]),
+ ("Economie et factions", [
+  ("EnableEconomy", "Economie", "bool", "Stations commerciales et contrats."),
+  ("EconomyTickInSeconds", "Periode economique (s)", "num", "Intervalle entre deux mises a jour des prix et des stocks."),
+  ("EnableBountyContracts", "Contrats de prime", "bool", ""),
+  ("TradeFactionsCount", "Factions marchandes", "num", ""),
+  ("MaxFactionsCount", "Factions max", "num", "0 = illimite."),
+  ("ReputationDecayRate", "Decroissance de reputation", "num", ""),
+  ("EnableFactionVoiceChat", "Chat vocal de faction", "bool", ""),
+  ("EnableTeamBalancing", "Equilibrage des equipes", "bool", ""),
+  ("EnableTeamScoreCounters", "Compteurs de score d'equipe", "bool", ""),
+ ]),
+ ("Environnement", [
+  ("WeatherSystem", "Meteo", "bool", ""),
+  ("WeatherLightingDamage", "Degats de la foudre", "bool", ""),
+  ("EnableSunRotation", "Rotation du soleil", "bool", "Cycle jour/nuit. Sans elle, l'eclairage et les panneaux solaires sont figes."),
+  ("SunRotationIntervalMinutes", "Duree d'un cycle solaire (min)", "num", ""),
+  ("SolarRadiationIntensity", "Intensite du rayonnement solaire", "num", ""),
+  ("FloraDensityMultiplier", "Densite de vegetation", "num", ""),
+  ("MaxPlanets", "Planetes max", "num", ""),
+  ("ResetForageableItems", "Reapparition des ressources ramassables", "bool", "Baies, branches et pierres au sol."),
+  ("ResetForageableItemsTimeM", "Delai de reapparition (min)", "num", ""),
+  ("ResetForageableItemsDistance", "Distance de reapparition (m)", "num", "Il faut s'eloigner d'autant pour qu'elles reviennent."),
+ ]),
+ ("Voxels et terrain", [
+  ("EnableVoxelHand", "Main a voxel", "bool", "Outil de terraformage. Creatif."),
+  ("PredefinedAsteroids", "Asteroides predefinis", "bool", "Champ d'asteroides pose a la creation, au lieu du procedural."),
+  ("ProceduralDensity", "Densite procedurale", "num", "Quantite d'asteroides generes autour des joueurs."),
+  ("ProceduralSeed", "Graine procedurale", "num",
+   "NE PAS CHANGER sur un monde en cours : tout le terrain jamais visite serait regenere "
+   "autrement."),
+  ("RandomizeSeed", "Regenerer la graine", "bool", "Tire une nouvelle graine au prochain chargement. Meme consequence."),
+  ("DepositSizeDenominator", "Diviseur de taille des gisements", "num", "Plus grand = gisements plus petits."),
+  ("DepositsCountCoefficient", "Coefficient du nombre de gisements", "num", ""),
+  ("VoxelGeneratorVersion", "Version du generateur de voxel", "num", "Technique. Changer regenere le terrain non visite."),
+  ("StationsDistanceInnerRadius", "Rayon interne des stations (m)", "num", ""),
+  ("StationsDistanceOuterRadiusStart", "Debut du rayon externe (m)", "num", ""),
+  ("StationsDistanceOuterRadiusEnd", "Fin du rayon externe (m)", "num", ""),
+  ("OptimalSpawnDistance", "Distance d'apparition optimale (m)", "num", ""),
+ ]),
+ ("Nettoyage", [
+  ("TrashRemovalEnabled", "Nettoyage des debris", "bool", "A LAISSER ACTIF. Sinon les epaves s'accumulent sans fin."),
+  ("TrashFlagsValue", "Drapeaux de nettoyage", "num", "Champ de bits, chaque bit une categorie a nettoyer. Le jeu n'en expose pas le detail."),
+  ("VoxelTrashRemovalEnabled", "Nettoyage des voxels", "bool", "Efface les trous de forage abandonnes."),
+  ("VoxelAgeThreshold", "Age du voxel avant nettoyage (h)", "num", ""),
+  ("VoxelGridDistanceThreshold", "Distance voxel/grille (m)", "num", ""),
+  ("VoxelPlayerDistanceThreshold", "Distance voxel/joueur (m)", "num", ""),
+  ("MaxCargoBags", "Sacs de cargaison max", "num", ""),
+  ("TrashCleanerCargoBagsMaxLiveTime", "Duree de vie des sacs (min)", "num", ""),
+  ("TemporaryContainers", "Conteneurs temporaires", "bool", ""),
+  ("PlayerDistanceThreshold", "Distance au joueur (m)", "num", "En dessous, une grille n'est jamais nettoyee."),
+  ("PlayerCharacterRemovalThreshold", "Retrait d'un personnage deconnecte (min)", "num", ""),
+  ("PlayerInactivityThreshold", "Inactivite avant nettoyage (h)", "num", "0 = jamais."),
+  ("RemoveOldIdentitiesH", "Suppression des vieilles identites (h)", "num", "0 = jamais. Efface les joueurs qui ne reviennent plus."),
+  ("EnableTrashSettingsPlatformOverride", "Reglages de nettoyage imposes par la plateforme", "bool", "Les consoles imposent leurs propres seuils."),
+  ("ResetOwnership", "Reinitialiser les proprietaires", "bool", "ACTION UNIQUE : au prochain chargement, tous les blocs deviennent sans proprietaire."),
+  ("UpdateRespawnDictionary", "Mettre a jour le dictionnaire de reapparition", "bool", "Action technique unique."),
+ ]),
+ ("Stockage de grilles", [
+  ("GridStorageAllowsInventory", "Stockage avec inventaire", "bool", "Ranger une grille sans la vider."),
+  ("GridStorageMaxPerPlayer", "Grilles rangees max par joueur", "num", ""),
+  ("GridStorageMaxDistance", "Distance max (m)", "num", "0 = illimite."),
+  ("GridStorageQueueLimit", "File d'attente max", "num", ""),
+  ("GridStorageCombatCooldown", "Delai apres combat (s)", "num", "Empeche de ranger une grille pour fuir un combat."),
+  ("GridStorageRetrievalTimeMinMinutes", "Recuperation, minimum (min)", "num", ""),
+  ("GridStorageRetrievalTimeMaxMinutes", "Recuperation, maximum (min)", "num", ""),
+  ("GridStorageRetrievalTimeMultiplier", "Multiplicateur de recuperation", "num", ""),
+  ("GridStorageMinutesPerKm", "Minutes par km", "num", ""),
+  ("GridStorageMinutesPerPCU", "Minutes par PCU", "num", ""),
+  ("GridStorageExpediteFactor", "Facteur d'acceleration", "num", "Part du temps economisee en payant."),
+  ("GridStorageExpediteCostPerSecond", "Cout d'acceleration par seconde", "num", ""),
+ ]),
+ ("Multijoueur", [
+  ("SyncDistance", "Distance de synchronisation (m)", "num",
+   "PLAFONNE A 2000 par la compatibilite console. C'est pour ca que la physique selective "
+   "doit rester desactivee : Modular Encounters casse en dessous de 10000."),
+  ("BroadcastControllerMaxOfflineTransmitDistance", "Portee de l'antenne hors ligne (m)", "num", ""),
+  ("AFKTimeountMin", "Expulsion pour inactivite (min)", "num", "0 = jamais. Le nom du reglage porte une faute cote jeu, c'est bien AFK Timeout."),
  ]),
  ("Performance", [
-  ("TrashRemovalEnabled",          "Nettoyage des debris","bool","A LAISSER ACTIF. Sinon les epaves s'accumulent sans fin."),
-  ("StopGridsPeriodMin",           "Gel des grilles (min)","num","Fige les grilles inactives depuis N minutes."),
-  ("EnableSelectivePhysicsUpdates","Physique selective",  "bool","INCOMPATIBLE avec les mods de rencontres tant que SyncDistance est plafonne a 2000. Laisser desactive."),
-  ("ViewDistance",                 "Distance de vue",     "num", ""),
+  ("StopGridsPeriodMin", "Gel des grilles (min)", "num", "Fige les grilles inactives depuis N minutes."),
+  ("EnableSelectivePhysicsUpdates", "Physique selective", "bool",
+   "INCOMPATIBLE avec les mods de rencontres tant que SyncDistance est plafonne a 2000. "
+   "Laisser desactive."),
+  ("ViewDistance", "Distance de vue", "num", ""),
+  ("PhysicsIterations", "Iterations de physique", "num", "Plus haut = plus stable et plus lourd. La simulation reste mono-thread."),
+  ("SimplifiedSimulation", "Simulation simplifiee", "bool", ""),
+  ("AdaptiveSimulationQuality", "Qualite de simulation adaptative", "bool", "Le serveur baisse la qualite quand il peine."),
+  ("PrefetchShapeRayLengthLimit", "Limite de prechargement (m)", "num", ""),
+ ]),
+ ("Match", [
+  ("EnableMatchComponent", "Composant de match", "bool", "Regles de partie a manches. Sans objet sur un monde de survie."),
+  ("MatchDuration", "Duree du match (s)", "num", "0 = illimite."),
+  ("PreMatchDuration", "Duree d'avant-match (s)", "num", ""),
+  ("PostMatchDuration", "Duree d'apres-match (s)", "num", ""),
+  ("MatchRestartWhenEmptyTime", "Redemarrage quand vide (s)", "num", "0 = jamais."),
  ]),
 ]
+
 PLATS = [(k, l, t, a, (c[0] if c else None)) for _, g in REGLAGES for (k, l, t, a, *c) in g]
 TYPES = {k: (t, c) for (k, l, t, a, c) in PLATS}
 
 # Reglages qui cassent une partie ou un serveur si on les touche a l'aveugle.
 RISQUES = {
     "PermanentDeath": "critique",
+    "EnableSaving": "critique",
+    "ResetOwnership": "critique",
+    "ProceduralSeed": "critique",
+    "RandomizeSeed": "critique",
+    "VoxelGeneratorVersion": "critique",
     "TrashRemovalEnabled": "critique",
     "EnableSelectivePhysicsUpdates": "critique",
+    "GameMode": "critique",
+    "Scenario": "critique",
+    "ScenarioEditMode": "critique",
     "EnableRespawnShips": "attention",
     "EnvironmentHostility": "attention",
     "EnableCopyPaste": "attention",
     "EnableIngameScripts": "attention",
     "AutoSaveInMinutes": "attention",
+    "EnableUnsafeRotorTorques": "attention",
+    "EnableUnsafePistonImpulses": "attention",
+    "EnableSupergridding": "attention",
+    "SyncDistance": "attention",
+    "EncounterGeneratorVersion": "attention",
+    "UpdateRespawnDictionary": "attention",
+    "RemoveOldIdentitiesH": "attention",
+    "WorldSizeKm": "attention",
+    "EnableSpectator": "attention",
 }
 
 # --------------------------------------------------------------------------
@@ -1285,6 +1496,11 @@ h1{font-family:var(--font-cond);font-size:clamp(1.6rem,4.5vw,2.3rem);
   border:1px solid var(--line);border-radius:3px;padding:.6rem .8rem;box-shadow:var(--shadow)}
 .pilote .k{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.2em;text-transform:uppercase;
   color:var(--muted);margin-right:.35rem}
+.filtre{display:flex;gap:.6rem;align-items:center;background:var(--panel);border:1px solid var(--line);
+  border-radius:3px;padding:.6rem .8rem;box-shadow:var(--shadow)}
+.filtre input{flex:1;min-width:10rem}
+.filtre .n{font-family:var(--font-mono);font-size:.72rem;color:var(--muted);white-space:nowrap}
+.row.hide,section.hide{display:none}
 
 /* ---- sections ---- */
 form{display:flex;flex-direction:column;gap:1.6rem;margin:0}
@@ -1394,6 +1610,12 @@ footer.meta{font-family:var(--font-mono);font-size:.7rem;color:var(--muted);
     <button type="button" class="mini" id="sv_restart">Redemarrer</button>
     <button type="button" class="mini danger" id="sv_stop">Arreter</button>
     <span class="log" id="sv_msg" role="status" aria-live="polite">memes scripts que le terminal. L'arret demande au jeu de sauvegarder avant de couper.</span>
+  </div>
+
+  <div class="filtre">
+    <span class="k" style="font-family:var(--font-mono);font-size:.66rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)">Filtrer</span>
+    <input id="filtre" type="search" placeholder="nom, cle XML ou texte d'aide — ex. tenseur, rotor, trash">
+    <span class="n" id="filtre-n"></span>
   </div>
 
   <div class="notice err hide" id="err"><div id="err-txt"></div></div>
@@ -1550,8 +1772,28 @@ function rendre(){
                 '<div class="grid">'+corps+'</div>';
     f.appendChild(s);
   }
+  filtrer();
   diff();
 }
+// A 190 reglages, parcourir la page ne marche plus. Le filtre cherche dans le
+// libelle, la cle XML et l'aide, et masque les sections devenues vides plutot
+// que de laisser des titres orphelins.
+function filtrer(){
+  var q=(el("filtre").value||"").trim().toLowerCase();
+  var lignes=document.querySelectorAll("#f .row"),vus=0;
+  for(var i=0;i<lignes.length;i++){
+    var r=lignes[i];
+    var ok=!q||(r.textContent||"").toLowerCase().indexOf(q)>=0;
+    r.classList.toggle("hide",!ok);
+    if(ok)vus++;
+  }
+  var secs=document.querySelectorAll("#f section");
+  for(var s=0;s<secs.length;s++){
+    secs[s].classList.toggle("hide",!secs[s].querySelector(".row:not(.hide)"));
+  }
+  el("filtre-n").textContent=q?(vus+" / "+lignes.length):(lignes.length+" reglages");
+}
+el("filtre").oninput=filtrer;
 function courant(e){return e.type==="checkbox"?String(e.checked):e.value.trim();}
 function diff(){
   var ch=document.querySelectorAll("[data-k]"),n=0;

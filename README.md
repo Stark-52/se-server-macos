@@ -406,11 +406,21 @@ entirely (a wrong `SE_WORLD` would otherwise disarm the guard silently).
 
     python3 panel/settings.py     ->  http://127.0.0.1:8777 (SE_PANEL_PORT)
 
-A local page that reads 36 world settings, presents them grouped with a label
-and a help line each, then stops the server, rewrites them into the three files
-and starts it again. Settings are grouped into yield, survival, world, limits and
-performance, and the dangerous ones carry a warning stripe (permanent death,
-selective physics, trash removal).
+A local page that reads **every world setting the save file holds**, 190 of
+them, presents them grouped with a label and a help line each, then stops the
+server, rewrites them into the three files and starts it again. Sixteen groups:
+yield, survival, interface, world, mechanics, blocks and limits, weapons,
+NPCs and encounters, economy and factions, environment, voxels and terrain,
+cleanup, grid storage, multiplayer, performance, match. A filter box narrows
+them by label, XML key or help text, because 190 rows are not browsable.
+
+Twenty-five dangerous ones carry a warning stripe: permanent death, disabling
+saving, resetting ownership, changing the procedural seed on a live world, and
+the rest.
+
+Two settings are deliberately left out, `LimitBlocksBy` and `OnlineMode`: their
+valid values are not documented anywhere reachable, and a value the game
+refuses stops the world from loading at all.
 
 Four more sections sit below the settings:
 
