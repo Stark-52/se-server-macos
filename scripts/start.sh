@@ -73,6 +73,18 @@ for try in $(seq 1 "$SE_START_ATTEMPTS"); do
   tmux new-session -d -s "$SESSION" -c "$GAME" \
     "WINEPREFIX=$(printf '%q' "$WINEPREFIX") WINEDEBUG=fixme-all wine SpaceEngineersDedicated.exe -console"
 
+  # Tout ce que wine ecrit dans le pane est copie dans un fichier.
+  #
+  # Le .log du jeu ne contient QUE ce que le jeu journalise lui-meme. Une
+  # erreur de wine, une exception non geree, le message affiche quand le
+  # serveur s'arrete : tout cela va sur la sortie du pane, et disparait avec
+  # la session tmux. Deux arrets inexpliques ont deja ete perdus comme ca,
+  # avec pour seule trace un "unexpected error" vu de passage a l'ecran.
+  mkdir -p "$SE_ROOT/logs"
+  CONSOLE="$SE_ROOT/logs/console-$(date '+%Y%m%d-%H%M%S').log"
+  tmux pipe-pane -o -t "$SESSION" "cat >> $(printf '%q' "$CONSOLE")" 2>/dev/null \
+    && echo "Console captured   : $CONSOLE"
+
   ok=0; fail=0
   for i in $(seq 1 "$STEPS"); do
     sleep "$POLL"

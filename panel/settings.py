@@ -432,12 +432,17 @@ _DEPART = re.compile(r"(?i)\b(?:player|user|client)\s*[:=]?\s*[\"']?([^\"'\n]{1,
 
 
 def joueurs_connectes():
-    """Compte au mieux les joueurs presents en relisant le journal du serveur.
+    """Nombre de joueurs presents, d'apres le compteur du serveur lui-meme.
 
-    Le serveur dedie n'expose pas de compteur : on rejoue les arrivees et les
-    departs du dernier journal. Renvoie None si le journal est illisible ou
-    muet, l'interface affiche alors une valeur indisponible plutot qu'un
-    chiffre invente.
+    Le serveur ecrit toutes les 60 s un bloc STATISTICS precede de sa legende,
+    dont une colonne est GetOnlinePlayerCount. C'est SA valeur, pas une
+    reconstitution : c'est ce que lit stop.sh, et le panneau doit lire la meme
+    chose. Rejouer les arrivees et les departs, comme ici avant, donnait None
+    sur un journal ou aucune des deux formulations n'apparaissait, et le
+    panneau annoncait alors "inconnu" sur un serveur ou quelqu'un jouait.
+
+    Ne sert que de secours desormais. Renvoie None quand rien n'est lisible :
+    l'appelant doit traiter None comme "peut-etre des joueurs", jamais comme 0.
     """
     try:
         logs = [p for p in INST.glob("*.log") if p.is_file()]
@@ -448,6 +453,25 @@ def joueurs_connectes():
             taille = recent.stat().st_size
             fh.seek(max(0, taille - 512 * 1024))
             texte = fh.read().decode("utf-8", errors="replace")
+
+        legende, valeurs = None, None
+        for ligne in texte.splitlines():
+            if "STATISTICS LEGEND," in ligne:
+                legende = ligne.split("STATISTICS LEGEND,", 1)[1].split(",")
+                valeurs = None
+            elif "STATISTICS," in ligne and legende is not None:
+                valeurs = ligne.split("STATISTICS,", 1)[1].split(",")
+        if legende and valeurs:
+            paires = dict(zip([c.strip() for c in legende], valeurs))
+            brut = paires.get("GetOnlinePlayerCount")
+            if brut is not None:
+                try:
+                    return int(float(brut))
+                except ValueError:
+                    pass
+
+        # Secours : rejouer arrivees et departs. Moins fiable, garde pour les
+        # journaux ou le bloc de statistiques n'a pas encore ete ecrit.
         vus, trouve = set(), False
         for ligne in texte.splitlines():
             m = _ARRIVEE.search(ligne)
