@@ -33,7 +33,7 @@ SE_GAME="${SE_GAME:-$SE_ROOT/game/DedicatedServer64}"
 SE_TMUX_SESSION="${SE_TMUX_SESSION:-se}"
 SE_START_TIMEOUT="${SE_START_TIMEOUT:-900}"
 SE_SAVE_MAX_AGE="${SE_SAVE_MAX_AGE:-180}"
-SE_STOP_TIMEOUT="${SE_STOP_TIMEOUT:-300}"
+SE_STOP_TIMEOUT="${SE_STOP_TIMEOUT:-420}"
 SE_START_ATTEMPTS="${SE_START_ATTEMPTS:-3}"
 
 # Homebrew lives in /opt/homebrew on Apple Silicon and /usr/local on Intel.

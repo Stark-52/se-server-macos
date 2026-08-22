@@ -47,11 +47,18 @@
 # default is deliberately generous.
 : "${SE_START_TIMEOUT:=900}"
 
-# How long to wait, in SECONDS, for the game to answer the shutdown request.
-# A running server saves and unloads in about two seconds. A server still
-# LOADING queues the request and only honours it once the session is up, which
-# with a dozen mods takes minutes: hence the generous default.
-: "${SE_STOP_TIMEOUT:=300}"
+# How long to wait, in SECONDS, for stop.sh to reach a safe point.
+#
+# Two outcomes end the wait: the game honours the shutdown request and saves,
+# or an autosave completes and cutting becomes free. The default must therefore
+# comfortably exceed AutoSaveInMinutes: raise it if the world autosaves less
+# often than every five minutes.
+#
+# A running server usually answers in about two seconds. But it queues the
+# request while the world is loading, and it has been seen ignoring it outright
+# for minutes with players connected: hence the wait, and hence the autosave
+# route out of it.
+: "${SE_STOP_TIMEOUT:=420}"
 
 # Maximum age, in SECONDS, of the save file for stop.sh to accept cutting the
 # server FOR LACK OF ANYTHING BETTER. It is a fallback: stop.sh first asks the

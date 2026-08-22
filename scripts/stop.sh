@@ -79,10 +79,14 @@ echo "Players online      : ${PLAYERS:-?}"
 MARK=0
 [ -n "$LOG" ] && MARK=$(wc -c < "$LOG")
 
-echo "Clean shutdown      : asking the game (PID $PID) to save and exit."
 # The two halves of a hand-typed Ctrl+C. Order does not matter, both must land.
-tmux send-keys -t "$SESSION" C-c 2>/dev/null
-kill -INT "$PID" 2>/dev/null
+_ask() {
+  tmux send-keys -t "$SESSION" C-c 2>/dev/null
+  kill -INT "$PID" 2>/dev/null
+}
+
+echo "Clean shutdown      : asking the game (PID $PID) to save and exit."
+_ask
 
 # What proves a saving shutdown is the ORDER of two lines: "Exiting.." says the
 # request was accepted, and the save that follows it is the shutdown save.
@@ -97,29 +101,49 @@ _shutdown_done() {
            END {exit !ok}'
 }
 
+# Second acceptable outcome: an autosave completes while we wait. The game did
+# not shut down, but the world on disk is then a few seconds old, so cutting
+# costs nothing. This is what makes the wait worth its length.
+_autosave_done() {
+  [ -n "$LOG" ] || return 1
+  tail -c "+$((MARK + 1))" "$LOG" 2>/dev/null | grep -q "Session snapshot save - END"
+}
+
 SAVED=0
+FRESH=0
 ANNOUNCED=0
+# A short grace before the autosave route is accepted, so a clean shutdown that
+# is about to land still wins: it unloads the session properly, the autosave
+# only writes the world.
+GRACE=20
 for i in $(seq 1 "$SE_STOP_TIMEOUT"); do
   sleep 1
   kill -0 "$PID" 2>/dev/null || { SAVED=1; break; }
   _shutdown_done && { SAVED=1; break; }
+  if [ "$i" -gt "$GRACE" ] && _autosave_done; then FRESH=1; break; fi
   if [ "$ANNOUNCED" = 0 ] && [ -n "$LOG" ] \
      && tail -c "+$((MARK + 1))" "$LOG" 2>/dev/null | grep -q "Exiting\.\."; then
     ANNOUNCED=1
     echo "                      request accepted, saving."
   fi
-  # The game does not always honour the request at once. It queues it while
-  # the world is still loading, and for a couple of minutes after "Game ready"
-  # as well: measured between 0.1 s and 3 min on the same machine.
-  [ $((i % 30)) = 0 ] && echo "                      still waiting, ${i}s."
+  # The game does not always honour the request at once, and one attempt is not
+  # enough: measured between 0.1 s and never, the "never" seen with players
+  # connected. So ask again, and keep waiting for the autosave meanwhile.
+  if [ $((i % 30)) = 0 ]; then
+    echo "                      no answer after ${i}s, asking again."
+    _ask
+  fi
 done
 
 if [ "$SAVED" = 1 ]; then
   echo "World saved         : by the shutdown itself, $(date '+%H:%M:%S')."
+elif [ "$FRESH" = 1 ]; then
+  echo "No shutdown, but     : an autosave just completed, $(date '+%H:%M:%S')."
+  echo "                      cutting now costs seconds, not minutes."
 else
-  # The game never answered. Fall back to the old guard: refuse to cut when
-  # the save on disk is too old, because cutting now loses everything since.
-  echo "NO RESPONSE after ${SE_STOP_TIMEOUT}s: the game ignored the shutdown request."
+  # Neither route worked. Fall back to the old guard: refuse to cut when the
+  # save on disk is too old, because cutting now loses everything since.
+  echo "NO RESPONSE after ${SE_STOP_TIMEOUT}s, and no autosave in that window."
   if [ -f "$SAVE" ]; then
     AGE=$(( $(date +%s) - $(stat -f "%m" "$SAVE") ))
     echo "Last save on disk   : $((AGE/60))m$((AGE%60))s ago."
@@ -150,7 +174,9 @@ kill -0 "$PID" 2>/dev/null && { kill -9 "$PID" 2>/dev/null; sleep 2; }
 tmux kill-session -t "$SESSION" 2>/dev/null
 
 if [ "$SAVED" = 1 ]; then
-  echo "Server stopped, world saved."
+  echo "Server stopped, world saved by the game itself."
+elif [ "$FRESH" = 1 ]; then
+  echo "Server stopped, world at the autosave taken seconds ago."
 else
   echo "Server stopped (world is at the state of the save reported above)."
 fi

@@ -260,7 +260,7 @@ LECTURE = FICHIERS[0]
 # defaut). Le demarrage reessaie SE_START_ATTEMPTS fois, chacune jusqu'a
 # SE_START_TIMEOUT. Couper avant la fin ferait declarer un echec au panneau
 # sur un serveur qui finit par se lever, et laisserait les deux desaccordes.
-DELAI_ARRET = 400
+DELAI_ARRET = 520
 DELAI_DEMARRAGE = 3000
 
 # --------------------------------------------------------------------------
@@ -1424,7 +1424,9 @@ function tuile(cls,k,v,u,n){
          '<div class="v">'+v+(u?'<span class="u">'+esc(u)+'</span>':'')+'</div>'+
          '<div class="n">'+esc(n)+'</div></div>';
 }
+var ETAT={};
 function bord(r){
+  ETAT=r||{};
   var t="";
   t+=tuile(r.enLigne?"s-ok":"s-stop","Statut",
       '<span class="dot'+(r.enLigne?" pulse":"")+'"></span>'+(r.enLigne?"En ligne":"Arrete"),"",
@@ -1442,7 +1444,27 @@ function bord(r){
   el("sv_start").disabled=on;
   el("sv_stop").disabled=!on;
 }
+// Couper avec des joueurs connectes n'est pas anodin : le jeu ignore parfois
+// la demande d'arret propre dans ce cas, et stop.sh attend alors la prochaine
+// sauvegarde automatique, ce qui prend des minutes. Le dire AVANT, et demander
+// un second clic, plutot que de laisser croire a un blocage.
+var ARME=null;
 function serveur(action,libelle){
+  // Un compteur inconnu (null) n'est PAS zero : c'est le cas juste apres un
+  // demarrage, avant la premiere ligne de statistiques du journal. Le traiter
+  // comme zero ferait sauter l'avertissement precisement quand on ne sait pas.
+  var j=ETAT.joueurs;
+  var risque=(action!=="demarrer")&&ETAT.enLigne&&(j===null||j===undefined||j>0);
+  if(risque&&ARME!==action){
+    ARME=action;
+    el("sv_msg").className="log ko";
+    el("sv_msg").textContent=(j?(j+" joueur"+(j>1?"s":"")+" connecte"+(j>1?"s":""))
+                                :"nombre de joueurs inconnu")+
+      ". Le jeu peut mettre plusieurs minutes a repondre ; l arret attendra une "+
+      "sauvegarde avant de couper. Recliquer pour confirmer.";
+    return;
+  }
+  ARME=null;
   var b=document.querySelectorAll("#pilote .mini");
   b.forEach(function(x){x.disabled=true;});
   el("console").classList.add("busy");
