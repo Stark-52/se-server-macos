@@ -75,7 +75,7 @@ fi
 
 # Stop first. stop.sh keeps its save-age guard, so a refusal here is a refusal
 # to lose work, not a failure of this script.
-if pgrep -f "SpaceEngineersDedicated.exe" > /dev/null; then
+if se_running; then
   echo "Stopping the server before editing the world..."
   if ! "$SE_ROOT/scripts/stop.sh" $FORCE; then
     echo

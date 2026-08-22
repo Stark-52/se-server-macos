@@ -14,10 +14,10 @@ It does not hold the game itself.
 
 - Starts and stops the official dedicated server binaries under Wine.
 - Keeps the server in a detached `tmux` session, so it survives closing the
-  terminal, and so a real `Ctrl+C` can be typed into a real console.
+  terminal and still offers a live console.
 - Retries a start that crashes or hangs, watching the server log for readiness.
-- Refuses to stop the server when the last save is too old, because there is no
-  clean programmatic shutdown and everything since the last autosave is lost.
+- Stops the server by asking the game to shut down, which saves the world, and
+  refuses to cut on an old save if the game does not answer.
 - Documents the EOS crossplay configuration (console-compatible worlds,
   mod.io mods, password hashing, admin promotion).
 - Ships a local web panel that reads and rewrites the world settings, then
@@ -28,9 +28,9 @@ It does not hold the game itself.
 - **It does not ship the game.** The server files come from steamcmd
   (app `298740`, anonymous login). They are several GB and not ours to
   redistribute.
-- **It does not provide a clean shutdown.** No signal, no `taskkill`, no
-  scripted keystroke saves the world. Only a `Ctrl+C` typed by hand in the live
-  console does. See [Known limitations](#known-limitations).
+- **It does not stop the server instantly.** The shutdown is the game's own, so
+  it happens when the game decides: measured between 0.1 s and 3 min on the
+  same machine. See [Known limitations](#known-limitations).
 - **It does not support Steam Workshop mods.** Crossplay excludes them.
   mod.io works and is the path used by Xbox and PlayStation.
 - **It does not convert an existing save to crossplay.** A console-compatible
@@ -385,17 +385,22 @@ passes through to it.
     tmux attach -t se           # live console, session name is SE_TMUX_SESSION
                                 # (detach: Ctrl+B then D)
 
-`start.sh` runs Wine directly inside the tmux pane, with no `caffeinate` in the
-chain, because that is the only arrangement where a `Ctrl+C` typed after
-`tmux attach` has a chance of reaching the server. `caffeinate` is started
-alongside instead, watching the server PID, so the machine stays awake while the
-server runs. Each attempt watches the newest `.log` for `Game ready`, and gives
+`start.sh` runs Wine directly inside the tmux pane, with nothing in between, so
+the game is the pane process and the foreground process group of the pty: the
+console stays usable and signals go where you think they go. `caffeinate` is
+started alongside instead, watching the server PID, so the machine stays awake
+while the server runs. Each attempt watches the newest `.log` for `Game ready`, and gives
 up on `CRASH INFO`, `FATAL UNHANDLED` or `Session can not start`.
 
-`stop.sh` prints the age of the last save and the number of players online, then
-refuses to cut when the save is older than `SE_SAVE_MAX_AGE`, and when the save
-file is missing entirely (a wrong `SE_WORLD` would otherwise disarm the guard
-silently). `--force` overrides both.
+`stop.sh` sends `SIGINT` to the game, which is Space Engineers' own shutdown:
+it saves the world, unloads the session and closes Steam. The script waits up to
+`SE_STOP_TIMEOUT` for the log to show `Exiting..` followed by a completed save,
+then cuts the process, which never exits by itself (see below).
+
+If the game never answers, it falls back to the old guard: it refuses to cut
+when the save is older than `SE_SAVE_MAX_AGE`, and when the save file is missing
+entirely (a wrong `SE_WORLD` would otherwise disarm the guard silently).
+`--force` overrides both.
 
 ### Settings panel
 
@@ -514,19 +519,28 @@ Performance:
 
 ## Known limitations
 
-**No clean programmatic shutdown.** With `-console`, Wine opens a real console
-window while the server runs. A `Ctrl+C` typed by hand in that window triggers
-the shutdown save (`Exiting..` then `Autosave in unload`). That is the only
-method that works.
+**The shutdown is clean, but it is the game's own and it takes its time.**
+`SIGINT` sent to the game triggers `Exiting..`, `Autosave in unload`, then the
+save. Nothing is lost. But the game only honours the request when it feels like
+it: 0.1 s on a server that has been up a few minutes, and up to 3 min on one
+that has just reached `Game ready` or is still loading a world. `stop.sh` waits
+`SE_STOP_TIMEOUT` for it, which is why stopping is not instant.
 
-Everything else was tested and fails: `kill -INT`, `kill -TERM`, `kill -HUP`,
-`wine taskkill`, `tmux send-keys C-c` (with and without `caffeinate` in the
-chain), and the remote API on port 8080, which does not listen. The server makes
-itself leader of its own process group, so a SIGINT from a terminal never
-reaches it. System Events sees no usable window on the Wine process either, so
-the keystroke cannot be automated. `stop.sh` does what it can and tells you
-plainly whether the world was saved; otherwise you fall back to the autosave
-interval (`AutoSaveInMinutes`).
+**The process does not exit after that shutdown.** It sits on "press any key to
+close this window", spinning a core, and no key sent from a script reaches it:
+`tmux send-keys` writes the byte and the console echoes `^C`, but nothing
+happens. `stop.sh` therefore kills the process, AFTER the log confirms the save.
+
+This was believed impossible for a long time, and the reason is a trap worth
+knowing: `pgrep -f "SpaceEngineersDedicated.exe"` matches the `tmux` process
+too, because the wine command line sits in its arguments, and `tmux` always has
+the lower PID. Every `| head -1` therefore returned TMUX. The signals went to
+the terminal, which closed the pty under the game, which died unsaved. The fix
+is `se_pid()` in `scripts/common.sh`: filter on the process NAME, not on its
+command line.
+
+Still untested for lack of need: the remote API on port 8080, which does not
+listen.
 
 **A `kill -9` during an autosave can corrupt the world.** Observed once, as
 `Exception while loading world`. The next start recovered, and

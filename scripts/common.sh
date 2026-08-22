@@ -33,6 +33,7 @@ SE_GAME="${SE_GAME:-$SE_ROOT/game/DedicatedServer64}"
 SE_TMUX_SESSION="${SE_TMUX_SESSION:-se}"
 SE_START_TIMEOUT="${SE_START_TIMEOUT:-900}"
 SE_SAVE_MAX_AGE="${SE_SAVE_MAX_AGE:-180}"
+SE_STOP_TIMEOUT="${SE_STOP_TIMEOUT:-300}"
 SE_START_ATTEMPTS="${SE_START_ATTEMPTS:-3}"
 
 # Homebrew lives in /opt/homebrew on Apple Silicon and /usr/local on Intel.
@@ -70,3 +71,24 @@ SE_WINE_USER="$(se_resolve_wine_user)"
 # Server data root inside the prefix: logs sit here, saves under Saves/.
 SE_APPDATA="$SE_PREFIX/drive_c/users/$SE_WINE_USER/AppData/Roaming/SpaceEngineersDedicated"
 SE_SAVE_DIR="$SE_APPDATA/Saves/$SE_WORLD"
+
+# PID du jeu, et de lui seul.
+#
+# `pgrep -f` cherche dans la ligne de commande ENTIERE. Le processus tmux porte
+# la commande wine dans ses arguments, donc il correspond lui aussi, et son PID
+# est toujours le plus petit des deux puisque c'est lui qui lance le jeu : un
+# `pgrep -f ... | head -1` designait donc SYSTEMATIQUEMENT tmux. Un signal
+# envoye a ce PID coupait le pty, et le jeu mourait sans jamais rien recevoir.
+# On filtre donc sur le NOM du processus, qui lui ne ment pas.
+se_pid() {
+  local p
+  for p in $(pgrep -f "SpaceEngineersDedicated\.exe" 2>/dev/null); do
+    case "$(ps -o comm= -p "$p" 2>/dev/null)" in
+      *SpaceEngineersDedicated.exe) printf '%s\n' "$p"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Vrai si le jeu tourne. A preferer a `pgrep -f`, pour la meme raison.
+se_running() { se_pid >/dev/null; }

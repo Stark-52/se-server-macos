@@ -47,10 +47,18 @@
 # default is deliberately generous.
 : "${SE_START_TIMEOUT:=900}"
 
-# Maximum age, in SECONDS, of the save file for stop.sh to accept shutting the
-# server down. There is no clean programmatic shutdown (see scripts/stop.sh),
-# so anything built since the last autosave is lost. Above this age stop.sh
-# refuses and asks for --force.
+# How long to wait, in SECONDS, for the game to answer the shutdown request.
+# A running server saves and unloads in about two seconds. A server still
+# LOADING queues the request and only honours it once the session is up, which
+# with a dozen mods takes minutes: hence the generous default.
+: "${SE_STOP_TIMEOUT:=300}"
+
+# Maximum age, in SECONDS, of the save file for stop.sh to accept cutting the
+# server FOR LACK OF ANYTHING BETTER. It is a fallback: stop.sh first asks the
+# game to shut down cleanly, which saves. This guard only applies when the game
+# did not answer within SE_STOP_TIMEOUT, where cutting would lose everything
+# built since the last autosave. Above this age stop.sh refuses and asks for
+# --force.
 : "${SE_SAVE_MAX_AGE:=180}"
 
 # --- Optional overrides -----------------------------------------------------

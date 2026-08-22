@@ -252,6 +252,17 @@ FICHIERS = [
 ]
 LECTURE = FICHIERS[0]
 
+# Delais accordes aux deux scripts, en secondes.
+#
+# L'arret demande d'abord au jeu de s'arreter proprement, ce qu'il honore en
+# deux secondes une fois le monde charge, mais qu'il met en file d'attente
+# tant qu'il charge : stop.sh patiente jusqu'a SE_STOP_TIMEOUT (300 s par
+# defaut). Le demarrage reessaie SE_START_ATTEMPTS fois, chacune jusqu'a
+# SE_START_TIMEOUT. Couper avant la fin ferait declarer un echec au panneau
+# sur un serveur qui finit par se lever, et laisserait les deux desaccordes.
+DELAI_ARRET = 400
+DELAI_DEMARRAGE = 3000
+
 # --------------------------------------------------------------------------
 # Schema des reglages : cle XML, libelle, type, aide, [choix]
 # --------------------------------------------------------------------------
@@ -453,9 +464,27 @@ def joueurs_connectes():
         return None
 
 
+def _pid_du_jeu():
+    """PID du jeu, et de lui seul, ou None.
+
+    `pgrep -f` cherche dans la ligne de commande entiere : le processus tmux
+    porte la commande wine dans ses arguments et correspond donc lui aussi.
+    Se contenter de "pgrep a trouve quelque chose" ferait dire "en ligne" a
+    une session tmux survivante dont le jeu est mort depuis longtemps. On
+    filtre sur le NOM du processus. Meme raison que se_pid() dans common.sh.
+    """
+    r = subprocess.run(["pgrep", "-f", r"SpaceEngineersDedicated\.exe"],
+                       capture_output=True, text=True)
+    for pid in r.stdout.split():
+        nom = subprocess.run(["ps", "-o", "comm=", "-p", pid],
+                             capture_output=True, text=True).stdout.strip()
+        if nom.endswith("SpaceEngineersDedicated.exe"):
+            return pid
+    return None
+
+
 def etat(valeurs=None):
-    r = subprocess.run(["pgrep", "-f", "SpaceEngineersDedicated.exe"], capture_output=True, text=True)
-    en_ligne = bool(r.stdout.strip())
+    en_ligne = _pid_du_jeu() is not None
     sbs = MONDE_DIR / "SANDBOX_0_0_0_.sbs"
     age = int((time.time() - sbs.stat().st_mtime) // 60) if sbs.exists() else -1
     maxi = None
@@ -535,13 +564,14 @@ def sauvegardes(limite=24):
 
 
 def _noms_de_mods():
-    """Noms lisibles des mods, releves dans les journaux du serveur.
+    """Noms des mods releves dans les journaux du serveur.
 
-    Le monde ne stocke que l'identifiant, et le dossier Mods/ est vide sur une
-    installation dediee : le serveur telecharge dans cache/ sous le seul
-    numero. Le nom n'existe donc nulle part sur le disque SAUF dans le journal,
-    que le serveur reecrit a chaque demarrage. Les journaux sont lus du plus
-    ancien au plus recent pour qu'un renommage cote mod.io finisse par gagner.
+    Secours, pas source principale : le nom du fichier du monde fait foi (voir
+    mods()). Le journal sert pour un mod qui n'est PAS dans le monde, donc
+    qu'aucun fichier ne nomme : une archive laissee dans cache/ apres un
+    retrait, ou une entree ajoutee a la main que le serveur n'a pas encore
+    reecrite. Les journaux sont lus du plus ancien au plus recent pour qu'un
+    renommage cote mod.io finisse par gagner.
     """
     noms = {}
     try:
@@ -563,39 +593,138 @@ def _noms_de_mods():
     return noms
 
 
+_MOD_ITEM = re.compile(r"<ModItem([^>]*)>(.*?)</ModItem>", re.S)
+
+
+def _bloc_mods(texte):
+    """Contenu du bloc <Mods>, ou chaine vide."""
+    m = re.search(r"<Mods>(.*?)</Mods>", texte, re.S)
+    return m.group(1) if m else ""
+
+
+def _lien_mod(ident, service):
+    return ("https://mod.io/g/spaceengineers?_q=" + ident) if service != "Steam" else \
+           ("https://steamcommunity.com/sharedfiles/filedetails/?id=" + ident)
+
+
+def _cache_mods():
+    """Archives deja telechargees, taille par identifiant.
+
+    Le serveur range chaque mod dans cache/<id>.zip et n'y touche plus : un
+    mod retire du monde y reste. C'est ce qui permet de le remettre sans rien
+    retelecharger, et c'est aussi ce qui fait grossir le dossier sans qu'aucun
+    ecran ne le signale.
+    """
+    out = {}
+    dossier = INST / "cache"
+    if not dossier.is_dir():
+        return out
+    for z in dossier.glob("*.zip"):
+        if z.stem.isdigit():
+            try:
+                out[z.stem] = z.stat().st_size
+            except OSError:
+                pass
+    return out
+
+
 def mods():
-    """Mods actifs du monde, dans l'ordre de chargement.
+    """Mods actifs du monde dans l'ordre de chargement, et cache des archives.
 
     L'ordre compte : Space Engineers applique les mods de haut en bas et le
     dernier gagne en cas de conflit. On le preserve tel qu'il est dans le
     fichier plutot que de trier par nom.
+
+    Le nom lisible est l'attribut FriendlyName du fichier du monde. Celui du
+    .cfg ne vaut rien : il est fige a l'ajout et vieillit (il dit encore
+    "Reddit Custom Encounters" la ou le monde dit "... - Legacy Version"). Le
+    journal ne sert que de secours, pour une entree que le serveur n'a pas
+    encore reecrite.
+
+    "dormants" = ce que le cache contient et que le monde ne charge pas. C'est
+    la liste des mods remettables sans telechargement, et la mesure de la
+    place occupee pour rien.
     """
     try:
         texte = (MONDE_DIR / "Sandbox_config.sbc").read_text(errors="replace")
     except OSError:
-        return {"liste": [], "nombre": 0, "sansNom": 0}
-    bloc = re.search(r"<Mods>(.*?)</Mods>", texte, re.S)
-    if not bloc:
-        return {"liste": [], "nombre": 0, "sansNom": 0}
+        texte = ""
     noms = _noms_de_mods()
+    zips = _cache_mods()
     out = []
-    for item in re.finditer(r"<ModItem[^>]*>(.*?)</ModItem>", bloc.group(1), re.S):
-        corps = item.group(1)
+    for attrs, corps in _MOD_ITEM.findall(_bloc_mods(texte)):
         ident = re.search(r"<PublishedFileId>(\d+)</PublishedFileId>", corps)
-        service = re.search(r"<PublishedServiceName>([^<]*)</PublishedServiceName>", corps)
         if not ident:
             continue
         i = ident.group(1)
-        s = (service.group(1) if service else "")
+        amical = re.search(r'FriendlyName="([^"]*)"', attrs)
+        service = re.search(r"<PublishedServiceName>([^<]*)</PublishedServiceName>", corps)
+        s = service.group(1) if service else ""
         out.append({
             "id": i,
-            "nom": noms.get(i),
+            "nom": (html.unescape(amical.group(1)) if amical and amical.group(1) else noms.get(i)),
             "service": s,
-            "lien": ("https://mod.io/g/spaceengineers?_q=" + i) if s == "mod.io" else
-                    ("https://steamcommunity.com/sharedfiles/filedetails/?id=" + i),
+            "dependance": bool(re.search(r"<IsDependency>\s*true\s*</IsDependency>", corps)),
+            "cache": (_taille_lisible(zips[i]) if i in zips else None),
+            "lien": _lien_mod(i, s),
         })
-    return {"liste": out, "nombre": len(out),
-            "sansNom": sum(1 for m in out if not m["nom"])}
+    actifs = {m["id"] for m in out}
+    dormants = [{"id": i, "nom": noms.get(i), "taille": _taille_lisible(o), "octets": o,
+                 "lien": _lien_mod(i, "mod.io")}
+                for i, o in sorted(zips.items(), key=lambda kv: -kv[1]) if i not in actifs]
+    return {
+        "liste": out,
+        "nombre": len(out),
+        "sansNom": sum(1 for m in out if not m["nom"]),
+        "dormants": dormants,
+        "dormantsPoids": _taille_lisible(sum(d["octets"] for d in dormants)),
+        "cacheTotal": _taille_lisible(sum(zips.values())),
+        "cacheChemin": str(INST / "cache"),
+    }
+
+
+def _mods_sans(texte, ident):
+    """Retire du bloc <Mods> toute entree portant cet identifiant.
+
+    La ligne d'indentation part avec l'entree : la laisser ne casserait rien,
+    mais chaque passage en ajouterait une de plus.
+    """
+    m = re.search(r"<Mods>(.*?)</Mods>", texte, re.S)
+    if not m:
+        return texte, 0
+    motif = re.compile(r"[ \t]*<ModItem[^>]*>(?:(?!</ModItem>).)*?"
+                       r"<PublishedFileId>" + re.escape(ident) + r"</PublishedFileId>"
+                       r".*?</ModItem>[ \t]*\r?\n?", re.S)
+    interieur, n = motif.subn("", m.group(1))
+    if not n:
+        return texte, 0
+    return texte[:m.start(1)] + interieur + texte[m.end(1):], n
+
+
+def _mods_avec(texte, ident, nom, service="mod.io"):
+    """Ajoute une entree a la FIN du bloc <Mods>, ou cree le bloc s'il manque.
+
+    A la fin, jamais en tete : le dernier mod charge gagne en cas de conflit,
+    donc un ajout en tete changerait le comportement de ceux deja en place.
+    """
+    entree = ('    <ModItem FriendlyName="' + html.escape(nom, quote=True) + '">\n'
+              '      <Name>' + ident + '.sbm</Name>\n'
+              '      <PublishedFileId>' + ident + '</PublishedFileId>\n'
+              '      <PublishedServiceName>' + service + '</PublishedServiceName>\n'
+              '    </ModItem>\n')
+    m = re.search(r"<Mods>(.*?)</Mods>", texte, re.S)
+    if m:
+        interieur = m.group(1)
+        # l'indentation qui precede </Mods> doit rester derriere l'ajout
+        queue = re.search(r"[ \t]*$", interieur).group(0)
+        corps = interieur[:len(interieur) - len(queue)]
+        if not corps.endswith("\n"):
+            corps += "\n"
+        return texte[:m.start(1)] + corps + entree + queue + texte[m.end(1):], True
+    vide = re.search(r"<Mods\s*/>", texte)
+    if vide:
+        return texte[:vide.start()] + "<Mods>\n" + entree + "  </Mods>" + texte[vide.end():], True
+    return texte, False
 
 
 def _sauvegarde_valide(nom):
@@ -616,9 +745,19 @@ def _sauvegarde_valide(nom):
     return cible if cible.is_dir() else None
 
 
-def reveler(nom):
-    """Ouvre le Finder sur une sauvegarde, ou sur le monde si nom est vide."""
-    cible = _sauvegarde_valide(nom) if nom else MONDE_DIR
+def reveler(nom, quoi=None):
+    """Ouvre le Finder sur une sauvegarde, sur le cache des mods, ou sur le monde.
+
+    Le cache est le seul dossier ou les mods existent vraiment : Mods/ reste
+    vide sur une installation dediee, le serveur telecharge dans cache/ sous
+    le seul numero du mod.
+    """
+    if quoi == "cache":
+        cible = INST / "cache"
+        if not cible.is_dir():
+            return {"ok": False, "erreur": "aucun cache de mods : " + str(cible)}
+    else:
+        cible = _sauvegarde_valide(nom) if nom else MONDE_DIR
     if cible is None:
         return {"ok": False, "erreur": "sauvegarde inconnue"}
     try:
@@ -651,7 +790,7 @@ def restaurer(nom, forcer=False):
             return {"ok": False, "erreur": "script introuvable : " + str(s)}
 
     cmd = ["bash", str(arret)] + (["--force"] if forcer else [])
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=DELAI_ARRET)
     if r.returncode != 0:
         detail = " ".join(((r.stdout or "") + " " + (r.stderr or "")).split())
         return {"ok": False, "arretRefuse": True,
@@ -673,11 +812,11 @@ def restaurer(nom, forcer=False):
         if sbsb5.exists():
             sbsb5.unlink()
     except (OSError, shutil.Error) as e:
-        subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+        subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=DELAI_DEMARRAGE)
         return {"ok": False, "erreur": "restauration interrompue : " + str(e)[:300] +
                 "  —  l'etat precedent est dans Backup/" + filet.name}
 
-    subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+    subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=DELAI_DEMARRAGE)
     return {"ok": True, "restauree": nom, "filet": filet.name}
 
 
@@ -802,7 +941,7 @@ def appliquer_administration(action, forcer=False, **kw):
             return {"ok": False, "erreur": "script introuvable : " + str(s)}
 
     r = subprocess.run(["bash", str(arret)] + (["--force"] if forcer else []),
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=DELAI_ARRET)
     if r.returncode != 0:
         detail = " ".join(((r.stdout or "") + " " + (r.stderr or "")).split())
         return {"ok": False, "arretRefuse": True,
@@ -859,15 +998,109 @@ def appliquer_administration(action, forcer=False, **kw):
             if b5.exists():
                 b5.unlink()
             resume.append(cible + " -> " + niveau)
+        elif action in ("mod_ajouter", "mod_retirer"):
+            # Trois fichiers portent la liste des mods, et ils ne disent pas la
+            # meme chose : le .cfg n'a pas les dependances resolues par le jeu.
+            # Ecrire un seul des trois laisse une liste qui se contredit.
+            ident = str(kw.get("mod") or "").strip()
+            if not re.fullmatch(r"\d{1,12}", ident):
+                raise ValueError("identifiant de mod attendu : des chiffres uniquement")
+            presents = {m["id"] for m in mods()["liste"]}
+            touches = []
+            if action == "mod_ajouter":
+                if ident in presents:
+                    raise ValueError("ce mod est deja dans le monde : " + ident)
+                nom = ((kw.get("nomMod") or "").strip()
+                       or _noms_de_mods().get(ident) or ("mod " + ident))
+                for fichier in FICHIERS:
+                    if not fichier.exists():
+                        continue
+                    neuf, pose = _mods_avec(fichier.read_text(encoding="utf-8", errors="replace"),
+                                            ident, nom)
+                    if pose:
+                        fichier.write_text(neuf, encoding="utf-8")
+                        touches.append(fichier.name)
+                if not touches:
+                    raise ValueError("aucun bloc <Mods> trouve, rien n'a ete ecrit")
+                resume.append("ajoute " + nom + " (" + ident + ") dans " + ", ".join(touches))
+            else:
+                if ident not in presents:
+                    raise ValueError("ce mod n'est pas dans le monde : " + ident)
+                for fichier in FICHIERS:
+                    if not fichier.exists():
+                        continue
+                    neuf, n = _mods_sans(fichier.read_text(encoding="utf-8", errors="replace"),
+                                         ident)
+                    if n:
+                        fichier.write_text(neuf, encoding="utf-8")
+                        touches.append(fichier.name)
+                resume.append("retire " + ident + " de " + ", ".join(touches) +
+                              " (l'archive reste dans cache/)")
+            b5 = MONDE_DIR / "SANDBOX_0_0_0_.sbsB5"
+            if b5.exists():
+                b5.unlink()
         else:
             raise ValueError("action inconnue : " + str(action))
 
     except (OSError, ValueError, re.error) as e:
-        subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+        subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=DELAI_DEMARRAGE)
         return {"ok": False, "erreur": str(e)[:300]}
 
-    subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+    subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=DELAI_DEMARRAGE)
     return {"ok": True, "resume": resume}
+
+
+def commander_serveur(action, forcer=False):
+    """Demarre, arrete ou redemarre le serveur.
+
+    Le panneau ne lance pas le binaire lui-meme : start.sh pose la session
+    tmux, la boucle de reprise et le caffeinate arrime au PID, et stop.sh
+    porte le garde-fou d'age de sauvegarde. Doubler l'un des deux ici donnerait
+    un serveur sans filet, ou un arret qui perd du travail sans le dire.
+
+    L'etat est relu APRES coup plutot que deduit du code de retour : un script
+    qui rend 0 en ayant echoue est plus frequent qu'un serveur qui ment sur sa
+    propre presence dans la table des processus.
+    """
+    if action not in ("demarrer", "arreter", "redemarrer"):
+        return {"ok": False, "erreur": "action inconnue : " + str(action)}
+    arret, demarrage = ROOT / "scripts/stop.sh", ROOT / "scripts/start.sh"
+    for s in (arret, demarrage):
+        if not s.is_file():
+            return {"ok": False, "erreur": "script introuvable : " + str(s)}
+
+    notes = []
+    if action in ("arreter", "redemarrer"):
+        if etat()["enLigne"]:
+            r = subprocess.run(["bash", str(arret)] + (["--force"] if forcer else []),
+                               capture_output=True, text=True, timeout=DELAI_ARRET)
+            detail = " ".join(((r.stdout or "") + " " + (r.stderr or "")).split())[:500]
+            if r.returncode != 0:
+                return {"ok": False, "arretRefuse": True, "enLigne": etat()["enLigne"],
+                        "erreur": "arret refuse, le serveur tourne toujours : " + detail}
+            notes.append("arrete")
+        else:
+            notes.append("etait deja arrete")
+
+    if action in ("demarrer", "redemarrer"):
+        if etat()["enLigne"]:
+            notes.append("tournait deja")
+        else:
+            # Large : start.sh reessaie SE_START_ATTEMPTS fois, chacune jusqu'a
+            # SE_START_TIMEOUT. Couper avant la fin laisserait un serveur en
+            # cours de chargement dont le panneau dirait qu'il a echoue.
+            subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=DELAI_DEMARRAGE)
+            notes.append("demarre")
+
+    en_ligne = etat()["enLigne"]
+    attendu = (action != "arreter")
+    if en_ligne == attendu:
+        return {"ok": True, "enLigne": en_ligne, "note": ", ".join(notes)}
+    return {"ok": False, "enLigne": en_ligne, "note": ", ".join(notes),
+            "erreur": ("le serveur tourne encore apres l'arret"
+                       if en_ligne else
+                       "le serveur ne repond pas apres le demarrage — tmux attach -t se, "
+                       "ou regarde le dernier journal")}
 
 
 # --------------------------------------------------------------------------
@@ -975,6 +1208,7 @@ h1{font-family:var(--font-cond);font-size:clamp(1.6rem,4.5vw,2.3rem);
   padding:.14rem .4rem;border-radius:2px;border:1px solid var(--line)}
 .pastille.admin{border-color:var(--signal);color:var(--signal)}
 .pastille.banni{border-color:var(--stop);color:var(--stop)}
+.pastille.dep{border-color:var(--hazard);color:var(--hazard)}
 .mini{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;
   padding:.28rem .55rem;border:1px solid var(--line);border-radius:2px;background:var(--panel2);
   color:var(--soft);cursor:pointer;white-space:nowrap}
@@ -1023,6 +1257,10 @@ h1{font-family:var(--font-cond);font-size:clamp(1.6rem,4.5vw,2.3rem);
 .notice.err::before{background:repeating-linear-gradient(-45deg,var(--stop) 0 5px,transparent 5px 10px)}
 .notice.err{color:var(--stop)}
 .notice.hide{display:none}
+.pilote{display:flex;flex-wrap:wrap;gap:.55rem;align-items:center;background:var(--panel);
+  border:1px solid var(--line);border-radius:3px;padding:.6rem .8rem;box-shadow:var(--shadow)}
+.pilote .k{font-family:var(--font-mono);font-size:.66rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--muted);margin-right:.35rem}
 
 /* ---- sections ---- */
 form{display:flex;flex-direction:column;gap:1.6rem;margin:0}
@@ -1126,9 +1364,17 @@ footer.meta{font-family:var(--font-mono);font-size:.7rem;color:var(--muted);
     <div class="lcd"><span class="k">Joueurs</span><div class="v">···</div><div class="n">&nbsp;</div></div>
   </div>
 
+  <div class="pilote" id="pilote">
+    <span class="k">Serveur</span>
+    <button type="button" class="mini" id="sv_start">Demarrer</button>
+    <button type="button" class="mini" id="sv_restart">Redemarrer</button>
+    <button type="button" class="mini danger" id="sv_stop">Arreter</button>
+    <span class="log" id="sv_msg" role="status" aria-live="polite">memes scripts que le terminal. L'arret demande au jeu de sauvegarder avant de couper.</span>
+  </div>
+
   <div class="notice err hide" id="err"><div id="err-txt"></div></div>
 
-  <div class="notice"><div>Appliquer <b>arrete le serveur</b>, ecrit dans les fichiers du monde, puis le relance : les joueurs sont deconnectes et tout ce qui n'a pas ete sauvegarde est perdu. Sans l'option d'arret force, <code>stop.sh</code> refuse de couper quand la derniere sauvegarde depasse <code>SE_SAVE_MAX_AGE</code>, et rien n'est ecrit. Lis l'age de la sauvegarde ci-dessus avant de valider.</div></div>
+  <div class="notice"><div>Appliquer <b>arrete le serveur</b>, ecrit dans les fichiers du monde, puis le relance : les joueurs sont deconnectes. <code>stop.sh</code> demande d'abord au jeu de s'arreter proprement, ce qui <b>sauvegarde le monde</b> ; il ne coupe qu'ensuite. Le jeu met parfois jusqu'a trois minutes a repondre. S'il ne repond pas du tout, l'arret est refuse quand la derniere sauvegarde depasse <code>SE_SAVE_MAX_AGE</code>, sauf option d'arret force.</div></div>
 
   <form id="f" autocomplete="off"></form>
 
@@ -1142,8 +1388,8 @@ footer.meta{font-family:var(--font-mono);font-size:.7rem;color:var(--muted);
   <div class="console-in">
     <button type="button" class="act" id="appliquer">Appliquer et redemarrer</button>
     <button type="button" class="act ghost" id="recharger">Recharger</button>
-    <label class="opt" id="opt-force" title="stop.sh refuse de couper quand la derniere sauvegarde est plus vieille que SE_SAVE_MAX_AGE. Cocher passe outre : tout ce qui a ete construit depuis est perdu.">
-      <input type="checkbox" id="forcer"><span>forcer l'arret malgre une sauvegarde ancienne</span>
+    <label class="opt" id="opt-force" title="Ne sert que si le jeu ignore la demande d'arret propre. Dans ce cas stop.sh refuse de couper quand la derniere sauvegarde est plus vieille que SE_SAVE_MAX_AGE ; cocher passe outre, et tout ce qui a ete construit depuis est perdu.">
+      <input type="checkbox" id="forcer"><span>si l'arret propre echoue, couper quand meme</span>
     </label>
     <span class="diff" id="diff">aucune modification</span>
     <span class="log" id="msg" role="status" aria-live="polite"></span>
@@ -1192,7 +1438,33 @@ function bord(r){
   else t+=tuile(j>0?"s-ok":"","Joueurs",String(j),mx?("/ "+mx):"",
       r.enLigne?"releve d'apres le journal":"serveur arrete");
   el("lcds").innerHTML=t;
+  var on=!!r.enLigne;
+  el("sv_start").disabled=on;
+  el("sv_stop").disabled=!on;
 }
+function serveur(action,libelle){
+  var b=document.querySelectorAll("#pilote .mini");
+  b.forEach(function(x){x.disabled=true;});
+  el("console").classList.add("busy");
+  var t0=Date.now();
+  el("sv_msg").className="log";el("sv_msg").textContent=libelle+" — 0 s";
+  var tick=setInterval(function(){
+    el("sv_msg").textContent=libelle+" — "+Math.round((Date.now()-t0)/1000)+" s";},1000);
+  function fini(){clearInterval(tick);el("console").classList.remove("busy");
+    b.forEach(function(x){x.disabled=false;});charger();inventaire();}
+  fetch("/api/serveur",{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify({action:action,forcer:!!(el("forcer")&&el("forcer").checked)})})
+   .then(function(x){return x.json();}).then(function(r){
+      el("sv_msg").className="log "+(r.ok?"ok":"ko");
+      el("sv_msg").textContent=r.ok?(libelle+" : "+(r.note||"fait"))
+        :((r.arretRefuse?"ARRET REFUSE  —  ":"echec  —  ")+(r.erreur||"inconnue"));
+      fini();
+   }).catch(function(e){el("sv_msg").className="log ko";
+      el("sv_msg").textContent="echec reseau : "+e;fini();});
+}
+el("sv_start").onclick=function(){serveur("demarrer","demarrage");};
+el("sv_restart").onclick=function(){serveur("redemarrer","redemarrage");};
+el("sv_stop").onclick=function(){serveur("arreter","arret");};
 
 /* --- formulaire --- */
 function champ(cle,type,choix,v){
@@ -1295,11 +1567,19 @@ function invAction(n,forcer){
       charger();inventaire();
    }).catch(function(){el("msg").textContent="echec reseau";inventaire();});
 }
-function invOuvrir(n){
+function invOuvrir(n,quoi){
   fetch("/api/reveler",{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({sauvegarde:n})}).then(function(x){return x.json();}).then(function(r){
+    body:JSON.stringify({sauvegarde:n,quoi:quoi||null})}).then(function(x){return x.json();}).then(function(r){
       if(!r.ok)el("msg").textContent="ouverture impossible  —  "+(r.erreur||"");
    }).catch(function(){});
+}
+function modConfirmer(id){
+  var c=document.querySelector("[data-modact=\""+CSS.escape(id)+"\"]");
+  if(!c)return;
+  c.innerHTML='<button type="button" class="mini" data-annule="1">Annuler</button>'+
+              '<button type="button" class="mini danger" data-modok="'+esc(id)+'">Confirmer</button>';
+  c.querySelector("[data-annule]").onclick=function(){inventaire();};
+  c.querySelector("[data-modok]").onclick=function(){admAction({action:"mod_retirer",mod:id},"retrait du mod");};
 }
 function invConfirmer(n){
   var c=document.querySelector("[data-act=\""+CSS.escape(n)+"\"]");
@@ -1388,24 +1668,70 @@ function inventaire(){
     h+="</table></div><p class=\"aide\">Restaurer arrete le serveur, met le monde actuel de cote dans Backup/ sous un nom "+
        "horodate, remet la sauvegarde choisie, puis relance. Une restauration se defait donc par une autre restauration.</p></section>";
 
-    var lm=m.liste||[];
+    var lm=m.liste||[],dm=m.dormants||[];
     var note=m.sansNom?((m.nombre||0)+" actifs, "+m.sansNom+" sans nom connu"):((m.nombre||0)+" actifs");
     h+="<section>"+secHead("S4","Mods",note)+"<div class=\"wrap\"><table class=\"tbl\">"+
-       "<tr><th></th><th>Nom</th><th>Identifiant</th></tr>";
+       "<tr><th></th><th>Nom</th><th>Identifiant</th><th class=\"droite\">Archive</th><th></th></tr>";
     for(var k=0;k<lm.length;k++){
-      var nn=lm[k].nom?esc(lm[k].nom):"<span class=\"sansnom\">nom inconnu, pas encore journalise par le serveur</span>";
-      h+="<tr><td class=\"num\">"+(k+1)+"</td><td>"+nn+"</td><td class=\"droite\"><a href=\""+esc(lm[k].lien)+
-         "\" target=\"_blank\" rel=\"noopener\">"+esc(lm[k].id)+"</a> <span class=\"sansnom\">"+esc(lm[k].service||"")+"</span></td></tr>";
+      var md=lm[k];
+      var nn=md.nom?esc(md.nom):"<span class=\"sansnom\">nom inconnu, le serveur ne l a pas encore journalise</span>";
+      h+="<tr><td class=\"num\">"+(k+1)+"</td><td>"+
+         (md.dependance?"<span class=\"pastille dep\">dependance</span> ":"")+nn+"</td>"+
+         "<td class=\"droite\"><a href=\""+esc(md.lien)+"\" target=\"_blank\" rel=\"noopener\">"+esc(md.id)+
+         "</a> <span class=\"sansnom\">"+esc(md.service||"")+"</span></td>"+
+         "<td class=\"droite\">"+(md.cache?esc(md.cache):"<span class=\"sansnom\">a telecharger</span>")+"</td>"+
+         "<td><div class=\"actions\" data-modact=\""+esc(md.id)+"\">"+
+         "<button type=\"button\" class=\"mini danger\" data-modret=\""+esc(md.id)+"\">Retirer</button>"+
+         "</div></td></tr>";
     }
-    if(!lm.length)h+="<tr><td colspan=\"3\" class=\"sansnom\">Aucun mod dans ce monde.</td></tr>";
-    h+="</table></div><p class=\"aide\">Ordre de chargement. Space Engineers applique les mods de haut en bas, "+
-       "le dernier gagne en cas de conflit. Les noms viennent du journal du serveur, pas du reseau.</p></section>";
+    if(!lm.length)h+="<tr><td colspan=\"5\" class=\"sansnom\">Aucun mod dans ce monde.</td></tr>";
+    h+="</table></div>";
+
+    h+="<div class=\"tbl\" style=\"margin-top:.7rem;padding:.2rem 0\">"+
+       "<div class=\"champ-ligne\"><label for=\"m_id\">Ajouter un mod</label>"+
+       "<input id=\"m_id\" type=\"text\" inputmode=\"numeric\" placeholder=\"numero mod.io, ex. 750855\">"+
+       "<input id=\"m_nom\" type=\"text\" placeholder=\"nom, facultatif\">"+
+       "<button type=\"button\" class=\"mini\" id=\"m_add\">Ajouter</button>"+
+       "<code class=\"cle\">le numero est la fin de l URL mod.io  —  ajoute en dernier, donc prioritaire en cas de conflit</code></div>"+
+       "<div class=\"champ-ligne\"><label>Dossier des mods</label>"+
+       "<button type=\"button\" class=\"mini\" id=\"m_cache\">Ouvrir le cache</button>"+
+       "<code class=\"cle\">"+esc(m.cacheChemin||"")+"  —  "+esc(m.cacheTotal||"0 o")+
+       " au total. Mods/ reste vide sur un serveur dedie, tout est ici, sous le seul numero.</code></div></div>";
+
+    h+="<div class=\"wrap\" style=\"margin-top:.7rem\"><table class=\"tbl\">"+
+       "<tr><th></th><th>Telecharge mais pas charge</th><th class=\"droite\">"+esc(m.dormantsPoids||"0 o")+"</th><th></th></tr>";
+    for(var d=0;d<dm.length;d++){
+      var dd=dm[d];
+      var dn=dd.nom?esc(dd.nom):"<span class=\"sansnom\">nom inconnu</span>";
+      h+="<tr><td class=\"num\">"+(d+1)+"</td><td>"+dn+" <a href=\""+esc(dd.lien)+
+         "\" target=\"_blank\" rel=\"noopener\" class=\"sansnom\">"+esc(dd.id)+"</a></td>"+
+         "<td class=\"droite\">"+esc(dd.taille)+"</td>"+
+         "<td><div class=\"actions\"><button type=\"button\" class=\"mini\" data-modadd=\""+esc(dd.id)+
+         "\" data-modnom=\""+esc(dd.nom||"")+"\">Remettre</button></div></td></tr>";
+    }
+    if(!dm.length)h+="<tr><td colspan=\"4\" class=\"sansnom\">Le cache ne contient que les mods du monde.</td></tr>";
+    h+="</table></div>";
+
+    h+="<p class=\"aide\">Ordre de chargement : Space Engineers applique les mods de haut en bas, le dernier gagne "+
+       "en cas de conflit. Ajouter ou retirer arrete le serveur, ecrit les TROIS fichiers qui portent la liste "+
+       "(le .cfg n a pas les dependances resolues par le jeu), puis relance. Retirer ne supprime pas l archive : "+
+       "elle reste dans le cache, donc le mod revient sans retelechargement. Une entree marquee dependance a ete "+
+       "tiree par un autre mod : la retirer seule et le jeu la remettra au demarrage suivant. "+
+       "Les noms viennent du fichier du monde, pas du reseau.</p></section>";
     el("inventaire").innerHTML=h;
 
     var inv=el("inventaire");
     inv.querySelectorAll("[data-ouvre]").forEach(function(b){b.onclick=function(){invOuvrir(b.dataset.ouvre);};});
     inv.querySelectorAll("[data-rest]").forEach(function(b){b.onclick=function(){invConfirmer(b.dataset.rest);};});
     var v=inv.querySelector("[data-vif]");if(v)v.onclick=function(){invOuvrir("");};
+    inv.querySelectorAll("[data-modret]").forEach(function(b){b.onclick=function(){modConfirmer(b.dataset.modret);};});
+    inv.querySelectorAll("[data-modadd]").forEach(function(b){b.onclick=function(){
+      admAction({action:"mod_ajouter",mod:b.dataset.modadd,nomMod:b.dataset.modnom||""},"ajout du mod");};});
+    el("m_cache").onclick=function(){invOuvrir("","cache");};
+    el("m_add").onclick=function(){
+      var v=(el("m_id").value||"").trim().replace(/^.*[\\/=]/,"");
+      if(!/^[0-9]{1,12}$/.test(v)){el("msg").textContent="saisis le numero du mod, des chiffres uniquement";return;}
+      admAction({action:"mod_ajouter",mod:v,nomMod:(el("m_nom").value||"").trim()},"ajout du mod");};
     inv.querySelectorAll("[data-prom]").forEach(function(b){b.onclick=function(){
       admAction({action:"promouvoir",hashedId:b.dataset.prom,niveau:b.dataset.niv},"promotion");};});
     inv.querySelectorAll("[data-ban]").forEach(function(b){b.onclick=function(){
@@ -1508,6 +1834,7 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not (self.path.startswith("/api/appliquer")
+                or self.path.startswith("/api/serveur")
                 or self.path.startswith("/api/restaurer")
                 or self.path.startswith("/api/reveler")
                 or self.path.startswith("/api/administration")):
@@ -1530,9 +1857,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 act, bool(recu.get("forcer")),
                 ServerName=recu.get("ServerName"), WorldName=recu.get("WorldName"),
                 motDePasse=recu.get("motDePasse"), hashedId=recu.get("hashedId"),
-                niveau=recu.get("niveau"), banni=recu.get("banni")))
+                niveau=recu.get("niveau"), banni=recu.get("banni"),
+                mod=recu.get("mod"), nomMod=recu.get("nomMod")))
+        if self.path.startswith("/api/serveur"):
+            return self._j(commander_serveur(recu.get("action"), bool(recu.get("forcer"))))
         if self.path.startswith("/api/reveler"):
-            return self._j(reveler(recu.get("sauvegarde")))
+            return self._j(reveler(recu.get("sauvegarde"), recu.get("quoi")))
         if self.path.startswith("/api/restaurer"):
             return self._j(restaurer(recu.get("sauvegarde"), bool(recu.get("forcer"))))
 
@@ -1565,7 +1895,7 @@ class H(http.server.BaseHTTPRequestHandler):
             #    le garde-fou d'age de sauvegarde de stop.sh s'applique, et un
             #    refus est un refus de perdre du travail.
             cmd = ["bash", str(arret)] + (["--force"] if forcer else [])
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=DELAI_ARRET)
             if r.returncode != 0:
                 detail = " ".join(((r.stdout or "") + " " + (r.stderr or "")).split())
                 return self._j({"ok": False, "arretRefuse": True,
@@ -1577,7 +1907,7 @@ class H(http.server.BaseHTTPRequestHandler):
             note = supprimer_sbsb5()
 
             # 3. Relancer.
-            subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=1200)
+            subprocess.run(["bash", str(demarrage)], capture_output=True, timeout=DELAI_DEMARRAGE)
             return self._j({"ok": etat()["enLigne"], "fichiers": modifies, "note": note})
         except Exception as e:
             return self._j({"ok": False, "erreur": str(e)})

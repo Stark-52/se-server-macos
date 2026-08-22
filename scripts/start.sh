@@ -1,11 +1,12 @@
 #!/bin/bash
 # Dedicated Space Engineers server (EOS crossplay) on macOS, through Wine.
 #
-# The server runs inside a detached tmux session. Two reasons:
-#  - the session survives closing the terminal and the agent that launched it
-#  - it provides a REAL terminal, so stop.sh can deliver a real Ctrl+C, the
-#    only method that triggers the shutdown save (SIGINT, SIGTERM, SIGHUP and
-#    taskkill were all tested: none of them works).
+# The server runs inside a detached tmux session, so it survives closing the
+# terminal and whatever launched it, and "tmux attach" gives a live console.
+#
+# Shutting down is stop.sh's job: SIGINT to the game saves the world. Note
+# "to the GAME": tmux matches the same pgrep pattern and has the lower PID,
+# which is what made the signal look useless for a long time. See se_pid().
 #
 # Wine must be running with Wine Mono, not the .NET Framework redistributable:
 # the 32-bit .NET installer deadlocks under Wine on Apple Silicon and never
@@ -51,8 +52,8 @@ if [ ! -x "$GAME/SpaceEngineersDedicated.exe" ] && [ ! -f "$GAME/SpaceEngineersD
   exit 1
 fi
 
-if pgrep -f "SpaceEngineersDedicated.exe" > /dev/null; then
-  echo "Server already running (PID $(pgrep -f SpaceEngineersDedicated.exe | head -1))."
+if se_running; then
+  echo "Server already running (PID $(se_pid))."
   exit 0
 fi
 tmux kill-session -t "$SESSION" 2>/dev/null
@@ -60,10 +61,11 @@ tmux kill-session -t "$SESSION" 2>/dev/null
 for try in $(seq 1 "$SE_START_ATTEMPTS"); do
   echo "--- Attempt $try/$SE_START_ATTEMPTS (up to $((SE_START_TIMEOUT / 60)) min; mods make loading much longer) ---"
   MARK=$(mktemp); sleep 1
-  # wine runs DIRECTLY in the pane, with no caffeinate in the chain: that is
-  # the only way a Ctrl+C typed by hand after "tmux attach -t se" has any
-  # chance of reaching the server. caffeinate is started alongside instead,
-  # watching the PID, so the Mac stays awake without polluting the chain.
+  # wine runs DIRECTLY in the pane, with nothing in between: the game is then
+  # the pane process and the foreground process group of the pty, which keeps
+  # the console usable and signals unambiguous. caffeinate is started
+  # alongside instead, watching the PID, so the Mac stays awake without
+  # inserting itself into the chain.
   #
   # WINEPREFIX is re-injected into the command string because a tmux server
   # that is already running does not inherit the caller's environment.
@@ -81,7 +83,7 @@ for try in $(seq 1 "$SE_START_ATTEMPTS"); do
   done
 
   if [ "$ok" = 1 ]; then
-    SPID=$(pgrep -f "SpaceEngineersDedicated.exe" | head -1)
+    SPID=$(se_pid)
     # -i veille inactive, -m veille des disques, -s veille systeme sur secteur.
     # caffeinate seul n'assure que -i, ce qui laisse le Mac s'endormir sur
     # d'autres chemins. -w arrime l'assertion au PID du serveur : elle tombe
@@ -91,12 +93,14 @@ for try in $(seq 1 "$SE_START_ATTEMPTS"); do
     echo "SERVER READY."
     grep -E "Networking service|Console compatibility|World Name" "$L" | sed 's/.*-> *//'
     echo "Live console       : tmux attach -t $SESSION   (detach: Ctrl+B then D)"
-    echo "Only safe shutdown : attach and press Ctrl+C yourself."
+    echo "Shutdown           : stop.sh   (asks the game to save, then stops it)"
     rm -f "$MARK"; exit 0
   fi
 
   tmux kill-session -t "$SESSION" 2>/dev/null
-  pkill -f "SpaceEngineersDedicated.exe" 2>/dev/null; sleep 3
+  # Le jeu seul : `pkill -f` emporterait aussi le serveur tmux, et avec lui
+  # les sessions sans rapport que l'utilisateur peut avoir ouvertes.
+  SPID=$(se_pid) && kill -9 "$SPID" 2>/dev/null; sleep 3
   rm -f "$MARK"
   [ "$fail" = 1 ] && echo "  crashed while starting, retrying." || echo "  timed out, retrying."
 done

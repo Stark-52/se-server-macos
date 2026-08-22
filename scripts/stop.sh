@@ -1,16 +1,28 @@
 #!/bin/bash
 # Stopping the server.
 #
-# WARNING: there is NO clean programmatic shutdown (SIGINT, SIGTERM, SIGHUP,
-# taskkill, tmux send-keys: all tested, none of them saves). So the process is
-# cut off, and EVERYTHING done since the last autosave is LOST.
+# A clean shutdown IS possible. It saves the world, unloads the session and
+# closes Steam, in about two seconds, and nothing is lost.
 #
-# A shutdown issued while a player was replacing a planet in game once wiped
-# that work. This script therefore REFUSES to cut when the save is older than
-# SE_SAVE_MAX_AGE (default 3 min), unless --force is passed.
+# It takes BOTH of these, and neither alone does anything (six runs, verified):
+#   - the 0x03 byte written into the console  (tmux send-keys C-c)
+#   - SIGINT delivered to the game process    (kill -INT)
+# Which is exactly what a Ctrl+C typed by hand into an attached terminal does:
+# the line discipline hands the byte to the application AND raises the signal.
+# tmux send-keys only does the first, kill -INT only the second.
 #
-# The only shutdown that saves: "tmux attach -t <session>" and press Ctrl+C by
-# hand in the live console.
+# That this was believed impossible comes from one trap: `pgrep -f` matches the
+# tmux process too, because the wine command line sits in its arguments, and
+# tmux always has the lower PID. Every `| head -1` therefore picked TMUX, so
+# the signal killed the terminal instead of the game, which died with the pty
+# under it, unsaved. See se_pid() in common.sh.
+#
+# Two behaviours to know about:
+#   - the game honours the request when it sees fit: 0.1 s once it has been up
+#     a few minutes, up to 3 min right after "Game ready" or while loading.
+#   - after the shutdown the process does NOT exit. It waits on "press any key
+#     to close this window" and no key sent by a script reaches it, so it is
+#     killed here, AFTER the save is confirmed in the log.
 
 # Dossier de CE script, symlinks resolus. Le code et l'installation sont deux
 # racines differentes : SE_ROOT designe l'INSTALLATION (jeu, prefixe, mondes,
@@ -28,7 +40,7 @@ done
 _CODE="$(cd "$(dirname "$_lien")" && pwd)"
 
 # SE_ROOT se deduit du chemin APPELE, pas du chemin resolu : appeler
-# <installation>/scripts/start.sh doit designer cette installation, meme quand
+# <installation>/scripts/stop.sh doit designer cette installation, meme quand
 # le fichier est un symlink vers le depot. Prendre le chemin resolu ferait
 # pointer SE_ROOT sur le depot, ou il n'y a ni jeu ni prefixe.
 SE_ROOT="${SE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -39,38 +51,21 @@ export WINEPREFIX="$SE_PREFIX"
 BASE="$SE_APPDATA"
 SAVE="$SE_SAVE_DIR/SANDBOX_0_0_0_.sbs"
 SESSION="$SE_TMUX_SESSION"
+FORCE=0
+[ "${1:-}" = "--force" ] && FORCE=1
 
-PID=$(pgrep -f "SpaceEngineersDedicated.exe" | head -1)
+PID=$(se_pid)
 if [ -z "$PID" ]; then
   tmux kill-session -t "$SESSION" 2>/dev/null
   echo "Server already stopped."; exit 0
 fi
 
-AGE=0
-if [ -f "$SAVE" ]; then
-  AGE=$(( $(date +%s) - $(stat -f "%m" "$SAVE") ))
-  echo "Last save           : $((AGE/60))m$((AGE%60))s ago."
-else
-  # No save file where it is expected: either SE_WORLD is wrong or the world
-  # has never been saved. Say so instead of pretending the save is fresh,
-  # because AGE=0 would silently disarm the guard below.
-  echo "Save file not found : $SAVE"
-  echo "                      (check SE_WORLD, currently \"$SE_WORLD\")"
-  if [ "${1:-}" != "--force" ]; then
-    echo
-    echo "REFUSING TO STOP: the save guard cannot verify anything."
-    echo "  - fix SE_WORLD in config.sh"
-    echo "  - or force with: stop.sh --force"
-    exit 1
-  fi
-fi
-
-# Any players connected?
-L=$(ls -t "$BASE"/*.log 2>/dev/null | head -1)
+# Any players connected? Read before the shutdown, the log stops updating after.
+LOG=$(ls -t "$BASE"/*.log 2>/dev/null | head -1)
 PLAYERS="?"
-if [ -n "$L" ]; then
-  LEGEND=$(grep "STATISTICS LEGEND" "$L" | tail -1 | sed 's/.*LEGEND,//')
-  VALUES=$(grep "STATISTICS," "$L" | tail -1 | sed 's/.*STATISTICS,//')
+if [ -n "$LOG" ]; then
+  LEGEND=$(grep "STATISTICS LEGEND" "$LOG" | tail -1 | sed 's/.*LEGEND,//')
+  VALUES=$(grep "STATISTICS," "$LOG" | tail -1 | sed 's/.*STATISTICS,//')
   if [ -n "$VALUES" ]; then
     PLAYERS=$(paste -d'|' <(echo "$LEGEND" | tr ',' '\n') <(echo "$VALUES" | tr ',' '\n') \
               | awk -F'|' '$1=="GetOnlinePlayerCount"{print $2}')
@@ -78,17 +73,84 @@ if [ -n "$L" ]; then
 fi
 echo "Players online      : ${PLAYERS:-?}"
 
-if [ "${1:-}" != "--force" ] && [ "$AGE" -gt "$SE_SAVE_MAX_AGE" ]; then
-  echo
-  echo "REFUSING TO STOP: the save is older than $((SE_SAVE_MAX_AGE/60))m$((SE_SAVE_MAX_AGE%60))s."
-  echo "Everything built or changed since would be LOST."
-  echo "  - wait for the autosave (every 10 min by default) and run this again"
-  echo "  - or force with: stop.sh --force"
-  exit 1
+# Only the bytes written AFTER the signal count. The log holds the save lines
+# of every previous shutdown, and matching one of those would report a save
+# that never happened.
+MARK=0
+[ -n "$LOG" ] && MARK=$(wc -c < "$LOG")
+
+echo "Clean shutdown      : asking the game (PID $PID) to save and exit."
+# The two halves of a hand-typed Ctrl+C. Order does not matter, both must land.
+tmux send-keys -t "$SESSION" C-c 2>/dev/null
+kill -INT "$PID" 2>/dev/null
+
+# What proves a saving shutdown is the ORDER of two lines: "Exiting.." says the
+# request was accepted, and the save that follows it is the shutdown save.
+# Matching "Session snapshot save - END" alone is wrong: the autosave fires
+# every SE_AUTOSAVE minutes and writes the very same line, so a stop that the
+# game quietly ignored would be reported as a clean one.
+_shutdown_done() {
+  [ -n "$LOG" ] || return 1
+  tail -c "+$((MARK + 1))" "$LOG" 2>/dev/null \
+    | awk '/Exiting\.\./ {seen = 1}
+           seen && /Session snapshot save - END/ {ok = 1}
+           END {exit !ok}'
+}
+
+SAVED=0
+ANNOUNCED=0
+for i in $(seq 1 "$SE_STOP_TIMEOUT"); do
+  sleep 1
+  kill -0 "$PID" 2>/dev/null || { SAVED=1; break; }
+  _shutdown_done && { SAVED=1; break; }
+  if [ "$ANNOUNCED" = 0 ] && [ -n "$LOG" ] \
+     && tail -c "+$((MARK + 1))" "$LOG" 2>/dev/null | grep -q "Exiting\.\."; then
+    ANNOUNCED=1
+    echo "                      request accepted, saving."
+  fi
+  # The game does not always honour the request at once. It queues it while
+  # the world is still loading, and for a couple of minutes after "Game ready"
+  # as well: measured between 0.1 s and 3 min on the same machine.
+  [ $((i % 30)) = 0 ] && echo "                      still waiting, ${i}s."
+done
+
+if [ "$SAVED" = 1 ]; then
+  echo "World saved         : by the shutdown itself, $(date '+%H:%M:%S')."
+else
+  # The game never answered. Fall back to the old guard: refuse to cut when
+  # the save on disk is too old, because cutting now loses everything since.
+  echo "NO RESPONSE after ${SE_STOP_TIMEOUT}s: the game ignored the shutdown request."
+  if [ -f "$SAVE" ]; then
+    AGE=$(( $(date +%s) - $(stat -f "%m" "$SAVE") ))
+    echo "Last save on disk   : $((AGE/60))m$((AGE%60))s ago."
+  else
+    # No save file where it is expected: either SE_WORLD is wrong or the world
+    # has never been saved. Say so instead of pretending the save is fresh,
+    # because AGE=0 would silently disarm the guard below.
+    AGE=$(( SE_SAVE_MAX_AGE + 1 ))
+    echo "Save file not found : $SAVE"
+    echo "                      (check SE_WORLD, currently \"$SE_WORLD\")"
+  fi
+  if [ "$FORCE" != 1 ] && [ "$AGE" -gt "$SE_SAVE_MAX_AGE" ]; then
+    echo
+    echo "REFUSING TO STOP: the save is older than $((SE_SAVE_MAX_AGE/60))m$((SE_SAVE_MAX_AGE%60))s."
+    echo "Everything built or changed since would be LOST."
+    echo "  - the server may still be loading, wait and run this again"
+    echo "  - or force with: stop.sh --force"
+    exit 1
+  fi
 fi
 
+# The process never exits by itself, saved or not: it sits on "press any key",
+# and no key sent from a script reaches it. Cutting here costs nothing, the
+# world is already on disk.
 kill -TERM "$PID" 2>/dev/null
 for i in $(seq 1 8); do sleep 2; kill -0 "$PID" 2>/dev/null || break; done
 kill -0 "$PID" 2>/dev/null && { kill -9 "$PID" 2>/dev/null; sleep 2; }
 tmux kill-session -t "$SESSION" 2>/dev/null
-echo "Server stopped (world is at the state of the save reported above)."
+
+if [ "$SAVED" = 1 ]; then
+  echo "Server stopped, world saved."
+else
+  echo "Server stopped (world is at the state of the save reported above)."
+fi
