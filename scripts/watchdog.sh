@@ -108,6 +108,24 @@ _silence() {
 # nothing: the game writes none of this to its own log, it goes to the console,
 # and Wine's crash dialog swallows the backtrace entirely until ShowCrashDialog
 # is turned off. See the README for that registry key.
+# Did the game shut ITSELF down, whoever asked it to?
+#
+# The stopped-on-purpose marker only covers stops that went through stop.sh.
+# Ctrl+C typed into the console is the documented manual way to stop this
+# server and writes no marker; neither does anything else that asks the game to
+# exit. Restarting over those makes the server impossible to stop by hand,
+# which is exactly what happened before this check existed.
+#
+# The game's own log settles it. "Exiting.." is written ONLY when a shutdown
+# request is accepted, and is followed by the shutdown save and "Log Closed".
+# A crash can never produce it: it stops the log mid-frame, which is precisely
+# what makes a crash recognisable. So this is authoritative in both directions,
+# and it does not care how the stop was asked for.
+_exited_cleanly() {
+  local l; l=$(_game_log); [ -n "$l" ] || return 1
+  grep -q "Exiting\.\." "$l" 2>/dev/null
+}
+
 _crash_signature() {
   local c; c=$(_console_log); [ -n "$c" ] || return 1
   grep -oE "at Havok\.[A-Za-z]+:[A-Za-z_]+|Unhandled page fault on [a-z]+ access|Got a [A-Z]+ while executing native code" "$c" \
@@ -216,6 +234,18 @@ _check() {
   # through the installation's symlink, so its command line carries the
   # installation path, not the resolved one.
   if pgrep -f "scripts/start\.sh" >/dev/null 2>&1 || [ -f "$RUN/starting" ]; then
+    return 0
+  fi
+
+  # Checked before anything else about the process, because both states can
+  # follow a deliberate stop: the game lingers on "press any key to close this
+  # window" after saving, so a Ctrl+C nobody finished off looks frozen, and
+  # once it is gone it looks crashed. Neither is ours to undo.
+  # The marker is written here too, so this costs one grep rather than one per
+  # minute, and `status` can say why it is standing down.
+  if _exited_cleanly; then
+    _say "the game shut itself down cleanly (Exiting..), standing down"
+    : > "$STOPPED"
     return 0
   fi
 
