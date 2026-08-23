@@ -16,11 +16,17 @@ game/
 prefix*/
 
 # Server logs: they contain the server name, player handles, absolute home
-# paths and network addresses. The server writes them inside the prefix, which
-# is already ignored above; these two lines are the net for a copy pulled out
-# of the prefix to be read. No script in this repository creates logs/.
+# paths and network addresses. The server writes its own inside the prefix,
+# which is already ignored above, but start.sh and watchdog.sh DO create
+# logs/ here: the Wine console capture, the watchdog log and the crash history.
+# The console capture is the server's stdout, so it carries the same handles.
 logs/
 *.log
+
+# Runtime state written by the watchdog and the start/stop scripts: the lock,
+# the restart timestamps and the two flags that say whether the server was
+# stopped on purpose or is still starting. Machine state, never source.
+run/
 
 # World and server configuration files, live copies included.
 # Sandbox.sbc, SANDBOX_0_0_0_.sbs and SpaceEngineers-Dedicated.cfg carry player

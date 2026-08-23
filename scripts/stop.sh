@@ -54,6 +54,14 @@ SESSION="$SE_TMUX_SESSION"
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
 
+# Tell the watchdog to stand down, BEFORE anything else. A clean shutdown can
+# take minutes, and the game stops writing to its log the moment it accepts the
+# request: to a watchdog that judges life by writes, a polite shutdown and a
+# crash look exactly alike. Without this marker it would race us and restart
+# the server we are in the middle of stopping.
+STOPPED="$SE_ROOT/run/stopped-on-purpose"
+mkdir -p "$SE_ROOT/run" && : > "$STOPPED"
+
 PID=$(se_pid)
 if [ -z "$PID" ]; then
   tmux kill-session -t "$SESSION" 2>/dev/null
@@ -161,6 +169,10 @@ else
     echo "Everything built or changed since would be LOST."
     echo "  - the server may still be loading, wait and run this again"
     echo "  - or force with: stop.sh --force"
+    # We are leaving the server RUNNING, so put it back under watch. Keeping
+    # the marker here would silently disarm the watchdog for the rest of the
+    # server's life, and the next crash would go unanswered.
+    rm -f "$STOPPED"
     exit 1
   fi
 fi

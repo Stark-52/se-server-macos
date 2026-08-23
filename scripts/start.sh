@@ -41,6 +41,20 @@ GAME="$SE_GAME"
 SELOG="$SE_APPDATA"
 SESSION="$SE_TMUX_SESSION"
 
+# Two flags the watchdog reads, and neither is optional.
+#
+# Clearing "stopped-on-purpose" re-arms it: the marker outlives the stop that
+# wrote it, so starting without clearing it would leave the server running
+# unwatched until the next stop.sh.
+#
+# "starting" holds it off meanwhile. Loading takes minutes with mods, the log
+# goes quiet in stretches while they download, and this script already retries
+# on its own. Two restart policies running at once load the world twice.
+RUN="$SE_ROOT/run"; mkdir -p "$RUN"
+rm -f "$RUN/stopped-on-purpose"
+: > "$RUN/starting"
+trap 'rm -f "$RUN/starting"' EXIT
+
 # Poll every 5 s; SE_START_TIMEOUT is expressed in seconds.
 POLL=5
 STEPS=$(( SE_START_TIMEOUT / POLL ))

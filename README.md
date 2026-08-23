@@ -106,6 +106,9 @@ is specific to your install:
 | `SE_START_TIMEOUT` | `900` | Seconds to wait for `Game ready` per attempt |
 | `SE_START_ATTEMPTS` | `3` | Start attempts before giving up |
 | `SE_SAVE_MAX_AGE` | `180` | Seconds; above this age `stop.sh` refuses to stop |
+| `SE_WATCHDOG_SILENCE` | `150` | Seconds without a log write before the server counts as dead |
+| `SE_WATCHDOG_MAX_RESTARTS` | `5` | Restarts allowed per window before the watchdog gives up |
+| `SE_WATCHDOG_WINDOW` | `3600` | Seconds that window covers |
 | `SE_PANEL_HOST` | `127.0.0.1` | Address the settings panel listens on |
 | `SE_PANEL_PORT` | `8777` | Local settings panel port |
 | `SE_PANEL_ALLOW_REMOTE` | `0` | Set to `1` to allow a non-loopback `SE_PANEL_HOST` |
@@ -205,6 +208,7 @@ Repository:
     scripts/common.sh          shared path and config resolution
     scripts/start.sh           start
     scripts/stop.sh            stop, with the save-age guard
+    scripts/watchdog.sh        crash detection and restart, launchd agent
     scripts/enable-scripts.sh  programmable block on/off, across the three files
     panel/settings.py          local settings page
     game/                      server binaries (git-ignored, steamcmd)
@@ -225,10 +229,13 @@ directory `start.sh` watches to decide whether a start succeeded.
 
 Nothing under `prefix*/`, `game/` or `backup-*/` belongs in git. The prefix
 leaks the account name through the folder name alone, and server logs and world
-files carry player handles, identity ids and the password hash. There is no
-`logs/` directory in this repository and no script creates one: the server
-writes its logs inside the prefix, next to the saves. `.gitignore` still lists
-`logs/` and `*.log`, as a net for a log copied out by hand to be read.
+files carry player handles, identity ids and the password hash.
+
+`$SE_ROOT/logs/` **is** created, by `start.sh` and by `watchdog.sh`, and holds
+the Wine console capture, the watchdog's own log and the crash history. Treat it
+exactly like the server's logs: the console capture is the server's stdout, so
+it carries player handles and everything Wine prints. `.gitignore` lists `logs/`
+and `*.log`, which covers it.
 
 ### The three-files rule
 
@@ -402,6 +409,42 @@ when the save is older than `SE_SAVE_MAX_AGE`, and when the save file is missing
 entirely (a wrong `SE_WORLD` would otherwise disarm the guard silently).
 `--force` overrides both.
 
+### Watchdog
+
+The server dies on its own, at random, inside the physics engine. See
+[The Havok crash](#the-havok-crash). Nothing can prevent it, so the watchdog
+restarts it instead.
+
+    ./scripts/watchdog.sh install     # a launchd agent, checks every 60 s
+    ./scripts/watchdog.sh status      # what it thinks, and the crash history
+    ./scripts/watchdog.sh check       # run one check by hand
+    ./scripts/watchdog.sh uninstall
+
+**It does not judge by whether the process exists.** A crashed server keeps its
+process: the thread that dies holds a critical section, every other thread then
+blocks on it forever, and the process sits there burning a core. `se_pid()`
+still finds it and the settings panel still calls it online. What it no longer
+does is simulate or save.
+
+So the test is whether the game is **still writing**. It logs `GC Memory:` every
+30 s regardless of load, so a log untouched for `SE_WATCHDOG_SILENCE` seconds is
+a dead server whatever `ps` says. On that signal the watchdog kills the process,
+records the crash and runs `start.sh`.
+
+Two flags in `$SE_ROOT/run/` keep it from fighting the other scripts.
+`stop.sh` writes `stopped-on-purpose` before it does anything, because a polite
+shutdown also stops the log and would otherwise look exactly like a crash;
+`start.sh` clears it and holds up the watchdog with `starting` while mods load.
+
+`logs/crashes.log` gets one line per crash: when, how long the server had been
+up, and the Havok signature if the console capture caught it. That history is
+the only way to tell whether anything you change actually reduces the crash
+rate, so read it before believing any explanation.
+
+After `SE_WATCHDOG_MAX_RESTARTS` restarts within `SE_WATCHDOG_WINDOW` it stops
+and says so. A world that crashes as it loads is not bad luck, and reloading it
+every minute only costs mod downloads.
+
 ### Settings panel
 
     python3 panel/settings.py     ->  http://127.0.0.1:8777 (SE_PANEL_PORT)
@@ -524,7 +567,7 @@ Performance:
 
     TrashRemovalEnabled             true    clears debris, net gain
     EnableSelectivePhysicsUpdates   false   see Known limitations
-    AutoSaveInMinutes               15
+    AutoSaveInMinutes               2       every crash costs everything since
     SyncDistance                    2000    capped, see Known limitations
 
 ## Known limitations
@@ -555,6 +598,55 @@ listen.
 **A `kill -9` during an autosave can corrupt the world.** Observed once, as
 `Exception while loading world`. The next start recovered, and
 `Saves/<world>/Backup/` keeps several restore points.
+
+### The Havok crash
+
+**The server dies at random, mid-game, inside the physics engine.** Measured
+here at roughly one crash per two hours with players connected, on uptimes of
+68, 122 and 147 minutes. Nothing in the game's own log announces it: the log
+simply stops mid-frame, in the middle of ordinary activity.
+
+The crash only appears in the Wine console, which is why `start.sh` captures it:
+
+    =================================================================
+        Native Crash Reporting
+    =================================================================
+    Got a UNKNOWN while executing native code.
+        at Havok.HkJobQueue:HkJobQueue_ProcessAllJobs
+        at Sandbox.Engine.Physics.MyPhysics:StepWorldsParallel
+        at Sandbox.Engine.Physics.MyPhysics:StepWorlds
+    wine: Unhandled page fault on read access to <address> (thread 0024)
+
+A read through a dead pointer in Havok's parallel job queue. The thread that
+dies holds a critical section, so the rest of the process piles up behind it:
+
+    err:sync:RtlpWaitForCriticalSection ... blocked by 0024, retrying (60 sec)
+
+The signature is not specific to this setup. Unmodded dedicated servers on
+Windows report the identical stack, and Keen has published no fix, so the crash
+itself is not repairable from here. How **often** it lands is a separate
+question, and one this setup may well make worse: the game expects the .NET
+Framework and gets Wine Mono, and the crash sits exactly on the managed-to-native
+boundary. Measure with `logs/crashes.log` rather than trust that reasoning,
+including where it appears above.
+
+There is a sequential physics path in the binaries, `StepWorldsSequential`, but
+it is selected by `MyFakes.ENABLE_HAVOK_MULTITHREADING`, a compile-time flag.
+The dedicated server accepts no command-line switch and exposes no setting for
+it, so reaching that path means patching game code, which this repository does
+not do.
+
+What is left is surviving it: see [Watchdog](#watchdog), and lower
+`AutoSaveInMinutes`, since every crash costs everything since the last autosave.
+
+**Turn Wine's crash dialog off.** By default Wine puts up a modal "Program
+Error" window, and until someone clicks it the dead process stays in the list,
+holding its tmux session and its prefix. It also swallows the native backtrace.
+One registry value fixes both, and the backtrace then lands in the console
+capture:
+
+    WINEPREFIX=... wine reg add 'HKEY_CURRENT_USER\Software\Wine\WineDbg' \
+        /v ShowCrashDialog /t REG_DWORD /d 0 /f
 
 **Startup crashes roughly once in four**, with a `NullReferenceException` in
 `MyGameService.UpdateNetworkThread`. `start.sh` retries. Suspected cause: the
@@ -679,6 +771,7 @@ from the startup log rather than from the config.
     scripts/common.sh           root, config and path resolution, sourced by the rest
     scripts/start.sh            start with retries, tmux session, caffeinate
     scripts/stop.sh             stop with the save-age guard
+    scripts/watchdog.sh         crash detection and restart, launchd agent
     scripts/enable-scripts.sh   programmable block on/off, across the three files
     panel/settings.py           local settings page on 127.0.0.1
     LICENSE
