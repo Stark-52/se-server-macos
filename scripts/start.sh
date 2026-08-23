@@ -123,7 +123,12 @@ for try in $(seq 1 "$SE_START_ATTEMPTS"); do
     # a session, the watchdog inherits that session's access.
     # It is a no-op when one is already running, which is the normal case when
     # the watchdog is the one that called this script.
-    "$_CODE/watchdog.sh" start
+    #
+    # SE_ROOT is handed over explicitly: $_CODE is the RESOLVED path, so the
+    # watchdog started from it would take the repository for the installation,
+    # keep its pidfile there, and never see the one already running here. That
+    # is how a second watchdog ends up watching a prefix that does not exist.
+    SE_ROOT="$SE_ROOT" "$_CODE/watchdog.sh" start
     echo "SERVER READY."
     grep -E "Networking service|Console compatibility|World Name" "$L" | sed 's/.*-> *//'
     echo "Live console       : tmux attach -t $SESSION   (detach: Ctrl+B then D)"
