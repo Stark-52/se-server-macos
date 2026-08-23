@@ -107,6 +107,7 @@ is specific to your install:
 | `SE_START_ATTEMPTS` | `3` | Start attempts before giving up |
 | `SE_SAVE_MAX_AGE` | `180` | Seconds; above this age `stop.sh` refuses to stop |
 | `SE_WATCHDOG_SILENCE` | `150` | Seconds without a log write before the server counts as dead |
+| `SE_WATCHDOG_INTERVAL` | `60` | Seconds between watchdog checks |
 | `SE_WATCHDOG_MAX_RESTARTS` | `5` | Restarts allowed per window before the watchdog gives up |
 | `SE_WATCHDOG_WINDOW` | `3600` | Seconds that window covers |
 | `SE_PANEL_HOST` | `127.0.0.1` | Address the settings panel listens on |
@@ -415,10 +416,30 @@ The server dies on its own, at random, inside the physics engine. See
 [The Havok crash](#the-havok-crash). Nothing can prevent it, so the watchdog
 restarts it instead.
 
-    ./scripts/watchdog.sh install     # a launchd agent, checks every 60 s
+    ./scripts/watchdog.sh start       # background loop, every SE_WATCHDOG_INTERVAL
     ./scripts/watchdog.sh status      # what it thinks, and the crash history
+    ./scripts/watchdog.sh stop
     ./scripts/watchdog.sh check       # run one check by hand
-    ./scripts/watchdog.sh uninstall
+
+**`start.sh` starts it for you**, next to `caffeinate`, and starting it twice
+is a no-op. Running it by hand is for a server that was already up.
+
+**It is a background loop, not a launchd agent, and that is deliberate.**
+launchd agents get no access to the macOS protected folders, which include
+`~/Documents`, `~/Desktop` and `~/Downloads`. An installation in one of them is
+unreadable to an agent, which dies before it starts:
+
+    /bin/bash: .../watchdog.sh: Operation not permitted     (exit 126)
+
+and even from elsewhere it could not read the game logs it exists to watch.
+`watchdog.sh install` still writes an agent, but it now verifies that the agent
+actually ran and removes it again if it did not, rather than reporting a
+watchdog that watches nothing. Making it work means granting Full Disk Access
+to `/bin/bash`, which hands the same access to every script on the machine.
+
+Started from a session, the loop inherits that session's access and works. The
+honest cost: **it does not come back by itself after a reboot.** Running
+`start.sh` brings back both.
 
 **It does not judge by whether the process exists.** A crashed server keeps its
 process: the thread that dies holds a critical section, every other thread then

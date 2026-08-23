@@ -240,7 +240,67 @@ _check() {
   _restart "gone"
 }
 
-# --- launchd --------------------------------------------------------------
+# --- the daemon -----------------------------------------------------------
+# Why a plain background loop and not a launchd agent.
+#
+# A launchd agent gets no access to the user's protected folders, and on macOS
+# that includes ~/Documents, ~/Desktop and ~/Downloads. An installation living
+# in one of them is unreachable: the agent dies before it starts with
+#
+#     /bin/bash: .../watchdog.sh: Operation not permitted   (exit 126)
+#
+# and even if the script were elsewhere, it still could not read the game logs
+# it exists to watch. Granting Full Disk Access to /bin/bash would fix it, and
+# would also hand every script on the machine the same access. Not worth it.
+#
+# Started from a terminal or from start.sh, the loop inherits the session's own
+# access and simply works. The cost is honest and stated in the README: it does
+# not come back by itself after a reboot, start.sh brings it back.
+INTERVAL="${SE_WATCHDOG_INTERVAL:-60}"
+PIDFILE="$RUN/watchdog.pid"
+
+_daemon_pid() {
+  local p; p=$(cat "$PIDFILE" 2>/dev/null) || return 1
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null && printf '%s\n' "$p"
+}
+
+_daemon() {
+  echo $$ > "$PIDFILE"
+  trap 'rm -f "$PIDFILE"' EXIT
+  _say "watchdog running (PID $$), checking every ${INTERVAL}s"
+  while :; do
+    if _lock; then _check; _unlock; fi
+    sleep "$INTERVAL"
+  done
+}
+
+_start() {
+  local p
+  if p=$(_daemon_pid); then echo "Watchdog already running (PID $p)."; return 0; fi
+  rm -f "$PIDFILE"
+  # Hand SE_ROOT down explicitly. The daemon is another run of this script, and
+  # this script derives SE_ROOT from where it was called from: spawned by its
+  # resolved path it would adopt the REPOSITORY as the installation, write its
+  # pidfile into the repository's run/, and be invisible to every later call
+  # made through the installation. It would then sit there watching a prefix
+  # that does not exist. Same two-roots trap as start.sh and stop.sh.
+  local self="$SE_ROOT/scripts/watchdog.sh"
+  [ -f "$self" ] || self="$_CODE/watchdog.sh"
+  # setsid does not exist on macOS; nohup plus a subshell detaches well enough
+  # that closing the terminal does not take the watchdog with it.
+  ( SE_ROOT="$SE_ROOT" nohup bash "$self" daemon >/dev/null 2>&1 & )
+  local i; for i in $(seq 1 10); do
+    sleep 1; p=$(_daemon_pid) && { echo "Watchdog started (PID $p)."; return 0; }
+  done
+  echo "Watchdog FAILED to start, see $WLOG"; return 1
+}
+
+_stop_daemon() {
+  local p; p=$(_daemon_pid) || { echo "Watchdog not running."; return 0; }
+  kill "$p" 2>/dev/null; rm -f "$PIDFILE"; _say "watchdog stopped (was PID $p)"
+}
+
+# --- launchd (optional, needs Full Disk Access) ----------------------------
 PLIST="$HOME/Library/LaunchAgents/com.se-server-macos.watchdog.plist"
 
 _install() {
@@ -266,7 +326,36 @@ _install() {
 </plist>
 EOF
   launchctl unload "$PLIST" 2>/dev/null
-  launchctl load "$PLIST" && _say "watchdog installed, checking every 60s"
+  launchctl load "$PLIST" || { echo "launchctl refused the agent."; return 1; }
+
+  # Never report this installed without seeing it run. launchctl loads an agent
+  # that cannot execute at all just as happily as one that can, and the failure
+  # this catches is the common one: an installation under ~/Documents, which a
+  # launchd agent may not read. Announcing success there would leave a watchdog
+  # that watches nothing, which is worse than none at all.
+  sleep 3
+  local st
+  st=$(launchctl list 2>/dev/null | awk '$3 == "com.se-server-macos.watchdog" {print $2}')
+  if [ -n "$st" ] && [ "$st" != "0" ]; then
+    launchctl unload "$PLIST" 2>/dev/null; rm -f "$PLIST"
+    echo "The launchd agent cannot run this installation (exit $st)."
+    [ "$st" = "126" ] && cat <<'TXT'
+
+  Exit 126 is macOS protecting a folder: launchd agents get no access to
+  ~/Documents, ~/Desktop or ~/Downloads, and this installation lives in one.
+  Reading the game logs from there would fail for the same reason.
+
+  Use the background watchdog instead, which inherits your session's access:
+
+      ./scripts/watchdog.sh start
+
+  start.sh also starts it for you. To keep launchd anyway, grant Full Disk
+  Access to /bin/bash in System Settings > Privacy & Security, which gives
+  every script on the machine that access too.
+TXT
+    return 1
+  fi
+  _say "watchdog installed as a launchd agent, checking every 60s"
 }
 
 _uninstall() {
@@ -275,10 +364,21 @@ _uninstall() {
 }
 
 _status() {
-  if launchctl list 2>/dev/null | grep -q "com.se-server-macos.watchdog"; then
-    echo "Watchdog            : installed, every 60s"
+  local p st
+  if p=$(_daemon_pid); then
+    echo "Watchdog            : running (PID $p), every ${INTERVAL}s"
+  elif st=$(launchctl list 2>/dev/null | awk '$3 == "com.se-server-macos.watchdog" {print $2}') \
+       && [ -n "$st" ]; then
+    # A loaded agent is not a working one: report the exit status, since the
+    # interesting case is exactly the one that loads and never runs.
+    if [ "$st" = "0" ]; then
+      echo "Watchdog            : launchd agent, every 60s"
+    else
+      echo "Watchdog            : launchd agent LOADED BUT FAILING (exit $st)"
+      echo "                      run: watchdog.sh uninstall && watchdog.sh start"
+    fi
   else
-    echo "Watchdog            : NOT installed  (watchdog.sh install)"
+    echo "Watchdog            : NOT running  (watchdog.sh start)"
   fi
   if [ -f "$STOPPED" ]; then
     echo "Server              : stopped on purpose, watchdog standing down"
@@ -300,9 +400,24 @@ _status() {
 }
 
 case "${1:-check}" in
+  start)     _start ;;
+  stop)      _stop_daemon ;;
+  daemon)    _daemon ;;
   check)     _lock || exit 0; trap _unlock EXIT; _check ;;
   install)   _install ;;
   uninstall) _uninstall ;;
   status)    _status ;;
-  *) echo "usage: watchdog.sh [check|install|uninstall|status]"; exit 1 ;;
+  *) cat <<'TXT'
+usage: watchdog.sh <command>
+
+  start      run the watchdog in the background (what start.sh does)
+  stop       stop it
+  status     what it thinks, and the crash history
+  check      run one check now, in the foreground
+  daemon     run the loop in the foreground (start uses this)
+  install    install a launchd agent instead; needs Full Disk Access, and
+             refuses when the installation sits in a protected folder
+  uninstall  remove that agent
+TXT
+  exit 1 ;;
 esac

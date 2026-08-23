@@ -116,6 +116,14 @@ for try in $(seq 1 "$SE_START_ATTEMPTS"); do
     # d'elle-meme a l'arret, sans processus orphelin.
     # Limite honnete : rabattre l'ecran endort la machine malgre tout.
     [ -n "$SPID" ] && (caffeinate -i -m -s -w "$SPID" >/dev/null 2>&1 &)
+    # The server dies on its own inside Havok, so something has to bring it
+    # back. Started from here, and not from launchd, because a launchd agent
+    # gets no access to macOS protected folders: an installation under
+    # ~/Documents is simply unreadable to it, game logs included. Launched from
+    # a session, the watchdog inherits that session's access.
+    # It is a no-op when one is already running, which is the normal case when
+    # the watchdog is the one that called this script.
+    "$_CODE/watchdog.sh" start
     echo "SERVER READY."
     grep -E "Networking service|Console compatibility|World Name" "$L" | sed 's/.*-> *//'
     echo "Live console       : tmux attach -t $SESSION   (detach: Ctrl+B then D)"
