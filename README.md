@@ -708,9 +708,11 @@ the world loads and, **only when `CONSOLE_COMPATIBLE` is set**, clamps a list of
 settings to the platform's limits. Taken from the shipped binaries:
 
     LIMIT_PLAYER_DISTANCE_THRESHOLD = 250     ceiling
-    LIMIT_SYNC_DISTANCE             = 2000    ceiling
-    LIMIT_VIEW_DISTANCE_MAX         = 7000
-    LIMIT_BLOCK_COUNT_THRESHOLD     = 0       floor, so 50 is untouched
+    LIMIT_BLOCK_COUNT_THRESHOLD     = 50      floor
+    LIMIT_SYNC_DISTANCE_MAX         = 2000    ceiling
+    LIMIT_MAX_FLOATING_OBJECTS      = 50      ceiling
+    LIMIT_VIEW_DISTANCE_MAX         = 7000    only when LIMIT_VIEW_DISTANCE is set,
+                                              which it is not, so ViewDistance is free
 
 It also overwrites `EnableContainerDrops`, `TrashRemovalEnabled`, `TotalPCU`,
 `MaxPlayers`, `BlockLimitsEnabled`, `EnableIngameScripts`, `GameMode`,
@@ -721,15 +723,18 @@ So `SyncDistance` stopping at 2000 is not a guess, and `EnableContainerDrops`
 reverting to `False` is not a mystery: both are this method. The only way out is
 turning console compatibility off, which is the same as giving up crossplay.
 
-**`PlayerDistanceThreshold` is capped at 250 m.** It is the radius inside which
-a grid is safe from trash removal, and on a console-compatible world it cannot
-be raised: anything larger is clamped straight back to 250. Debris that lands
-further away than that is removed, and the only remaining lever is
-`BlockCountThreshold`, which has a floor of `0` and is therefore free to lower.
-The game's own tooltip states the full rule: to be trash, a grid "has to contain
-just a few blocks, be in uniform linear motion, be unpowered, uncontrolled,
-without a medbay and far enough from all players so that they can barely see
-it".
+**Trash removal cannot be loosened on a console-compatible world.** Both bounds
+are locked from opposite directions: `PlayerDistanceThreshold` is a ceiling of
+250 m, and `BlockCountThreshold` is a floor of 50 blocks. Write anything outside
+that and it is clamped back at the next save, in all three files, without a word
+in the log.
+
+So a grid of 50 blocks or fewer, more than 250 m from every player, will be
+removed, and there is no setting that changes it. The game's own tooltip states
+the full rule: to be trash, a grid "has to contain just a few blocks, be in
+uniform linear motion, be unpowered, uncontrolled, without a medbay and far
+enough from all players so that they can barely see it". Pieces that break off a
+ship and land out of sight are exactly that, by design.
 
 **Do not enable `EnableSelectivePhysicsUpdates`.** Modular Encounters Systems
 detects it and warns:
