@@ -697,14 +697,39 @@ host name does not resolve, which is also why Wine logs
 
     sudo sh -c 'echo "127.0.0.1 $(scutil --get LocalHostName)" >> /etc/hosts'
 
-**`EnableContainerDrops` does not stick.** Set to `true` in all three files, the
-server reloads it as `False` at every start. Cause not identified; a possible
-lead is the empty `Installed DLCs:` line. Every other setting applies. This is
-the only one that resists.
+### Settings console compatibility overwrites
 
-**`SyncDistance` is capped at 2000.** All three files can hold 4000; the server
-logs 2000 at load and does not rewrite the files. In all likelihood a cap
-imposed by console compatibility.
+Several settings cannot be changed at all on a console-compatible world, and
+they revert without a word: written in all three files, they come back at the
+next autosave with the game's value, not yours.
+
+The mechanism is `MySession.PerformPlatformPatchBeforeLoad`, which runs before
+the world loads and, **only when `CONSOLE_COMPATIBLE` is set**, clamps a list of
+settings to the platform's limits. Taken from the shipped binaries:
+
+    LIMIT_PLAYER_DISTANCE_THRESHOLD = 250     ceiling
+    LIMIT_SYNC_DISTANCE             = 2000    ceiling
+    LIMIT_VIEW_DISTANCE_MAX         = 7000
+    LIMIT_BLOCK_COUNT_THRESHOLD     = 0       floor, so 50 is untouched
+
+It also overwrites `EnableContainerDrops`, `TrashRemovalEnabled`, `TotalPCU`,
+`MaxPlayers`, `BlockLimitsEnabled`, `EnableIngameScripts`, `GameMode`,
+`OnlineMode`, `MaxFloatingObjects`, `MaxPlanets`, `PredefinedAsteroids`,
+`VoxelGeneratorVersion` and the whole voxel trash block.
+
+So `SyncDistance` stopping at 2000 is not a guess, and `EnableContainerDrops`
+reverting to `False` is not a mystery: both are this method. The only way out is
+turning console compatibility off, which is the same as giving up crossplay.
+
+**`PlayerDistanceThreshold` is capped at 250 m.** It is the radius inside which
+a grid is safe from trash removal, and on a console-compatible world it cannot
+be raised: anything larger is clamped straight back to 250. Debris that lands
+further away than that is removed, and the only remaining lever is
+`BlockCountThreshold`, which has a floor of `0` and is therefore free to lower.
+The game's own tooltip states the full rule: to be trash, a grid "has to contain
+just a few blocks, be in uniform linear motion, be unpowered, uncontrolled,
+without a medbay and far enough from all players so that they can barely see
+it".
 
 **Do not enable `EnableSelectivePhysicsUpdates`.** Modular Encounters Systems
 detects it and warns:
