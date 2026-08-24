@@ -425,6 +425,14 @@ restarts it instead.
 **`start.sh` starts it for you**, next to `caffeinate`, and starting it twice
 is a no-op. Running it by hand is for a server that was already up.
 
+**It retires on its own.** Left running it would be a ghost process waking
+every minute to read a file, on a server nobody intends to restart. Once the
+server is stopped on purpose AND actually gone, the watchdog exits, and
+`start.sh` brings it back with the server. Both conditions are required:
+`stop.sh` writes the marker *before* asking for the shutdown and removes it
+again if it refuses to cut on a stale save, so leaving on the marker alone
+would abandon a server that is still very much alive.
+
 **It is a background loop, not a launchd agent, and that is deliberate.**
 launchd agents get no access to the macOS protected folders, which include
 `~/Documents`, `~/Desktop` and `~/Downloads`. An installation in one of them is

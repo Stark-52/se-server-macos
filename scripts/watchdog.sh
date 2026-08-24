@@ -104,10 +104,6 @@ _silence() {
   echo $(( $(date +%s) - $(stat -f "%m" "$l") ))
 }
 
-# The Havok signature, if the console capture caught it. Absence proves
-# nothing: the game writes none of this to its own log, it goes to the console,
-# and Wine's crash dialog swallows the backtrace entirely until ShowCrashDialog
-# is turned off. See the README for that registry key.
 # Did the game shut ITSELF down, whoever asked it to?
 #
 # The stopped-on-purpose marker only covers stops that went through stop.sh.
@@ -126,6 +122,10 @@ _exited_cleanly() {
   grep -q "Exiting\.\." "$l" 2>/dev/null
 }
 
+# The Havok signature, if the console capture caught it. Absence proves
+# nothing: the game writes none of this to its own log, it goes to the console,
+# and Wine's crash dialog swallows the backtrace entirely until ShowCrashDialog
+# is turned off. See the README for that registry key.
 _crash_signature() {
   local c; c=$(_console_log); [ -n "$c" ] || return 1
   grep -oE "at Havok\.[A-Za-z]+:[A-Za-z_]+|Unhandled page fault on [a-z]+ access|Got a [A-Z]+ while executing native code" "$c" \
@@ -300,6 +300,22 @@ _daemon() {
   _say "watchdog running (PID $$), checking every ${INTERVAL}s"
   while :; do
     if _lock; then _check; _unlock; fi
+
+    # Se retirer quand il n'y a plus rien a surveiller.
+    #
+    # start.sh le relance a chaque demarrage, donc rien ne justifie de boucler
+    # toute la nuit sur un serveur volontairement arrete : ce serait un
+    # processus fantome qui se reveille chaque minute pour lire un fichier.
+    #
+    # Les DEUX conditions sont necessaires. Le marqueur seul ne suffit pas :
+    # stop.sh l'ecrit AVANT de demander l'arret, et il le retire s'il refuse de
+    # couper sur une sauvegarde trop vieille. Partir sur le seul marqueur
+    # laisserait alors un serveur bien vivant sans surveillance.
+    if [ -f "$STOPPED" ] && ! se_running; then
+      _say "server stopped on purpose and gone: watchdog retiring, start.sh will bring it back"
+      return 0
+    fi
+
     sleep "$INTERVAL"
   done
 }
