@@ -50,6 +50,7 @@ import socketserver
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 # --------------------------------------------------------------------------
@@ -138,6 +139,64 @@ MONDE = _reglage("SE_WORLD") or "MyWorld"
 HOTE = _reglage("SE_PANEL_HOST") or "127.0.0.1"
 PORT = _entier(_reglage("SE_PANEL_PORT"), 8777)
 AUTORISE_DISTANT = _reglage("SE_PANEL_ALLOW_REMOTE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+# Veille : le panneau se ferme quand plus personne ne s'en sert.
+#
+# Il sert une page qu'on ouvre pour trois reglages puis qu'on oublie, et il
+# resterait sinon a tourner la nuit pour rien. La page n'interroge PAS le
+# serveur en boucle (deux setInterval, tous deux de simples compteurs de
+# secondes a l'ecran), donc un onglet laisse ouvert n'emet plus aucune requete :
+# l'inactivite se mesure vraiment.
+#
+# 0 desactive la veille.
+VEILLE = _entier(_reglage("SE_PANEL_IDLE_TIMEOUT"), 1800)
+
+
+def _duree(s):
+    """1800 -> "30 min", 45 -> "45 s". Sinon un reglage court affiche "0 min"."""
+    return "%d min" % (s // 60) if s >= 60 else "%d s" % s
+
+# Une requete "en cours" n'est pas de l'inactivite, meme longue. Appliquer des
+# reglages enchaine stop.sh et start.sh et prend plusieurs minutes pendant
+# lesquelles rien n'arrive : se fier au seul horodatage couperait le panneau au
+# milieu d'un redemarrage de serveur. D'ou le compteur, et non un simple "last".
+_veille_verrou = threading.Lock()
+_veille_dernier = time.time()
+_veille_encours = 0
+
+
+def _activite(methode):
+    """Marque le debut et la fin d'une requete pour le compte a rebours."""
+    def enveloppe(self, *a, **k):
+        global _veille_dernier, _veille_encours
+        with _veille_verrou:
+            _veille_encours += 1
+        try:
+            return methode(self, *a, **k)
+        finally:
+            with _veille_verrou:
+                _veille_encours -= 1
+                # Horodater a la FIN : une action de cinq minutes doit repousser
+                # la veille de cinq minutes, pas la laisser courir pendant.
+                _veille_dernier = time.time()
+    enveloppe.__name__ = methode.__name__
+    return enveloppe
+
+
+def _surveiller_veille(serveur):
+    """Ferme le panneau apres VEILLE secondes sans la moindre requete."""
+    pas = max(5, min(30, VEILLE // 10))
+    while True:
+        time.sleep(pas)
+        with _veille_verrou:
+            oisif = _veille_encours == 0 and (time.time() - _veille_dernier) >= VEILLE
+        if oisif:
+            print("Veille : %s sans activite, fermeture du panneau."
+                  % _duree(VEILLE), file=sys.stderr)
+            # Depuis un autre thread, c'est la seule facon propre d'arreter
+            # serve_forever : il rend la main et le with se referme normalement.
+            serveur.shutdown()
+            return
 
 
 def _boucle_locale(hote):
@@ -2072,9 +2131,9 @@ class H(http.server.BaseHTTPRequestHandler):
     server_version = "SEPanel/1.0"
 
     def log_message(self, *a):
-        # Les GET sont interroges en boucle par la page : les journaliser
-        # noierait le seul evenement qui compte. Les POST le sont dans do_POST,
-        # avec l'action demandee.
+        # Le journal par defaut de BaseHTTPRequestHandler noierait le seul
+        # evenement qui compte. Les POST sont tracees dans do_POST, avec
+        # l'action demandee.
         pass
 
     def _trace(self, quoi):
@@ -2128,6 +2187,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 return False
         return True
 
+    @_activite
     def do_GET(self):
         if not self._garde():
             return
@@ -2146,6 +2206,7 @@ class H(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    @_activite
     def do_POST(self):
         if not (self.path.startswith("/api/appliquer")
                 or self.path.startswith("/api/serveur")
@@ -2277,6 +2338,10 @@ if __name__ == "__main__":
             print("ATTENTION : ecoute sur %s, sans authentification." % HOTE, file=sys.stderr)
         print("Panneau de reglages : http://%s:%d" % (HOTE, PORT))
         print("Monde : %s   Racine : %s" % (MONDE, ROOT))
+        if VEILLE > 0:
+            print("Veille : fermeture apres %s sans activite "
+                  "(SE_PANEL_IDLE_TIMEOUT=0 pour desactiver)." % _duree(VEILLE))
+            threading.Thread(target=_surveiller_veille, args=(s,), daemon=True).start()
         print("Ctrl+C pour arreter.")
         try:
             s.serve_forever()

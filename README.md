@@ -113,6 +113,7 @@ is specific to your install:
 | `SE_PANEL_HOST` | `127.0.0.1` | Address the settings panel listens on |
 | `SE_PANEL_PORT` | `8777` | Local settings panel port |
 | `SE_PANEL_ALLOW_REMOTE` | `0` | Set to `1` to allow a non-loopback `SE_PANEL_HOST` |
+| `SE_PANEL_IDLE_TIMEOUT` | `1800` | Seconds of inactivity before the panel closes itself; `0` disables |
 
 `config.sh` is sourced by `scripts/common.sh`, and `panel/settings.py` sources
 it the same way, so one file configures both and they cannot end up pointing at
@@ -553,6 +554,18 @@ has full control. That is what the loopback default is for, and why reaching
 the panel from another machine should be a tunnel rather than an open port:
 
     ssh -N -L 8777:127.0.0.1:8777 user@the-mac
+
+**The panel closes itself when nobody is using it.** It is opened for three
+settings and then forgotten, and it would otherwise sit there all night. After
+`SE_PANEL_IDLE_TIMEOUT` seconds without a single request it shuts down and says
+so; `0` disables that.
+
+A tab left open does not keep it alive: the page does not poll: its only two
+timers count seconds on screen during a long action and send nothing. And a long
+action does not trip the timeout either. Applying settings runs `stop.sh` then
+`start.sh` and takes minutes during which nothing arrives, so the panel counts
+requests *in flight*, not just the last one seen, and stamps the clock when a
+request ENDS. Verified against a real 2 min 43 server start.
 
 The panel is in French; the settings it writes are the game's own English keys.
 
